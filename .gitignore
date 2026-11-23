@@ -1,0 +1,27 @@
+# Secrets & environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.pfx
+*.key
+
+# Local caches, databases & private workspaces
+.memento/
+.local/
+.codex/
+.gemini/
+.claude/
+.agents/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# OS & temporary artifacts
+.tmp/
+tmp/
+Thumbs.db
+.DS_Store

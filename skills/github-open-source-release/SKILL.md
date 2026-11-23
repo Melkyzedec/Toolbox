@@ -1,0 +1,47 @@
+---
+name: github-open-source-release
+description: "Prépare ou répète une publication open source sur GitHub. Fixe le dépôt, la licence et le périmètre, vérifie les fichiers exacts et publie après accord explicite."
+---
+
+# Publication open source sur GitHub
+
+Utilise cette skill pour une première publication, une mise à jour publique ou une répétition locale. Identifie le projet, son public et le premier résultat qu’une personne doit pouvoir obtenir. Lis les consignes et les preuves existantes.
+
+## 1. Cadrer et vérifier l’accès dès le départ
+
+- Fixe le livrable. Les **sources** demandent des prérequis, un README et un premier essai vérifiable. Un **paquet prêt à lancer** demande en plus une recette du paquet exact. Une **GitHub Release** est une publication versionnée à partir d’un tag. Crée-la uniquement si elle fait partie du résultat demandé.
+- Pour une diffusion GitHub, relève en une fois les décisions manquantes : compte ou organisation, dépôt et visibilité, nom public du titulaire pour la licence, licence souhaitée et contenu à diffuser. Vérifie tôt les droits sur le code repris, les médias et les composants distribués. Distingue les dépendances installées séparément de celles incluses dans le livrable. Explique la décision juridique en termes concrets.
+- Vérifie avant la préparation finale que le moyen choisi peut réaliser l’opération prévue, notamment **créer** un dépôt si besoin. Avec `gh`, compare le compte obtenu par `gh api user --jq .login` au compte prévu, puis vérifie le dépôt cible et les droits nécessaires. Une erreur 404 seule ne prouve pas que le nom est libre. Si la connexion est invalide ou sur un autre compte, signale-le tôt et laisse l’utilisateur terminer l’authentification. N’affiche aucun jeton ni code de connexion. En répétition locale, poursuis les contrôles sur disque sans demander de connexion.
+
+## 2. Constituer le candidat public
+
+- Examine l’état du dossier de travail, les fichiers suivis, modifiés et nouveaux, les distants et les métadonnées de l’historique. Compose dans une copie isolée la **liste exacte** des fichiers publics. Préserve le dossier et l’historique de travail. Si l’historique contient des éléments privés, prépare une copie avec un historique public distinct et une adresse GitHub `noreply` liée au compte prévu.
+- Avant le premier commit, ajoute ou vérifie `.env`, `.env.*` et `!.env.example` dans le `.gitignore` du candidat et les chemins des configurations locales sensibles, y compris les JSON du projet. Réserve `.env.example` à des valeurs fictives. Vérifie avec `git check-ignore --no-index` que `.env` et `.env.local` sont ignorés et que `.env.example` reste publiable. Contrôle les fichiers déjà suivis avec `git ls-files`.
+- Fournis les clés, jetons et mots de passe à l’exécution par des variables d’environnement ou un gestionnaire de secrets. Examine les captures, documents, données et chemins personnels. Bloque la diffusion si un secret ou un fichier privé reste dans le périmètre. Si un secret réel a été exposé, fais-le révoquer ou renouveler et traite les copies concernées avant la reprise.
+- Prépare le README, la licence convenue, les mentions des tiers et le canal d’aide. Si le projet accepte des contributions, indique comment proposer une modification ou signaler un problème. Pour un paquet compilé, fixe les entrées de construction et relie le **commit source**, le **fichier exact** et son **SHA-256** dans le dossier de livraison. Documente la redistribution des composants embarqués.
+
+## 3. Vérifier la version exacte et lancer le script de contrôle
+
+- Fais un essai représentatif avec des données fictives sur le système pris en charge. Réutilise les preuves déjà acquises pour le périmètre testé. Pour un changement de documentation ou d’inventaire, rejoue les contrôles touchés et vérifie de nouveau le candidat exact. Pour un changement de code, de dépendances ou de lancement, rejoue les tests et les parcours concernés. Pour un paquet compilé, teste le paquet exact dans un environnement propre. Consigne les résultats et les limites de chaque preuve. Isole les essais locaux et nettoie leurs fichiers temporaires en `finally`. Aucun appel LLM ou API payant par défaut.
+- Exécute le script de contrôle embarqué `scripts/check-release.ps1` (accompagné de `scripts/release-secrets.toml` et de `gitleaks` dans le `PATH` ou pointé par `GITLEAKS_PATH`) sur les sources destinées à être diffusées et sur chaque archive `.zip` à joindre. Passe `-GitRoot` pour contrôler **l’historique Git qui sera effectivement publié** :
+  ```powershell
+  powershell -NoProfile -File "<dossier-skill>/scripts/check-release.ps1" -ArtifactPath "<candidat-ou-zip>" -GitRoot "<depot-candidat>"
+  ```
+- **Procédure d’amorçage ou de régénération des scripts de contrôle :** si l’utilisateur souhaite intégrer la porte de contrôle directement dans son propre projet ou s’il travaille sur un environnement sans PowerShell :
+  1. Sur Windows / PowerShell (`5.1` ou `pwsh 7+`), copie `scripts/check-release.ps1` et `scripts/release-secrets.toml` dans le dossier d’outillage du projet (ex. `scripts/` ou `runtime/`).
+  2. Sur macOS / Linux (ou si les scripts sont absents), génère à partir de `scripts/check-release.ps1` et `scripts/release-secrets.toml` un script équivalent non destructif qui vérifie dans l’ordre : (a) l’absence de liens symboliques sortants, de traversée `../`, de fichiers privés (`.git`, `.env`, `.sqlite`, `.pem`, `.key`, `.gitleaksignore`) et de bombes/doublons dans les archives `.zip` (y compris imbriquées jusqu’à profondeur 3), (b) le scan `gitleaks dir --no-banner --redact=100 --ignore-gitleaks-allow --exit-code=23` avec la règle des variables publiques sensibles (`VITE_*`, `NEXT_PUBLIC_*`, `REACT_APP_*`, `EXPO_PUBLIC_*`, `PUBLIC_*`), (c) le contrôle de l’historique Git complet (`git rev-parse --is-shallow-repository`, `git ls-files -z`, `gitleaks git --log-opts="--all --full-history"`), et (d) l’émission d’un résumé JSON unique (`status`, `artifact`, `files`, `sha256`, `gitHistory`) sans jamais afficher la valeur d’un secret détecté dans `stdout` ou `stderr`.
+- Relie au même candidat la liste de fichiers, le commit, les résultats utiles et le SHA-256 de chaque archive soumise. Si le candidat change après son contrôle, rejoue les contrôles concernés sur la nouvelle version. Une erreur, un résultat bloqué ou un contrôle requis indisponible donne le statut « à corriger ».
+
+## 4. Obtenir l’accord et publier
+
+- Présente ensemble le dépôt exact, la visibilité, la licence, l’identité d’auteur visible, le commit, le contenu et les points à arbitrer. Avant tout envoi ou mise en visibilité, obtiens l’accord explicite sur le périmètre public. Renouvelle l’accord si le dépôt, la visibilité, la licence ou le contenu public change.
+- Envoie uniquement le commit ou les fichiers approuvés, sans réécriture ni opération destructive sans accord explicite. Si une création de dépôt a réussi mais que l’envoi a échoué, vérifie le dépôt existant et reprends uniquement l’étape manquante.
+- Vérifie après diffusion la visibilité, la branche et le commit distants, la présence de la licence, et les empreintes des fichiers joints si la publication en contient. Pour un dépôt public, vérifie aussi l’accès sans identifiants. Confirme le fichier de licence même si le badge GitHub tarde à apparaître.
+- Relève les protections réellement actives et propose les éventuels écarts : blocage des secrets à l’envoi, alertes de dépendances, analyse du code et protection de la branche principale. Si leur configuration est autorisée, vérifie à nouveau chaque état après changement. Pour GitHub Actions, limite les droits du jeton et épingle les actions externes à un commit complet. Garde les réglages personnels du compte hors du périmètre de publication.
+
+## Documentation officielle
+
+- [Connexion GitHub CLI](https://cli.github.com/manual/gh_auth_login) · [Créer un dépôt avec GitHub CLI](https://cli.github.com/manual/gh_repo_create)
+- [Lancer un projet open source](https://opensource.guide/starting-a-project/) · [Choisir et déclarer une licence](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)
+- [Adresse de commit GitHub](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address) · [Fonctionnement des Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)
+- [Sécuriser un dépôt](https://docs.github.com/en/code-security/getting-started/quickstart-for-securing-your-repository) · [Sécuriser GitHub Actions](https://docs.github.com/en/actions/reference/security/secure-use)
