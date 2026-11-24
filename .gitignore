@@ -7,10 +7,7 @@
 *.key
 
 # Local caches, databases & private workspaces
-.memento/
 .local/
-.codex/
-.gemini/
 .claude/
 .agents/
 *.sqlite
