@@ -1,0 +1,64 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate skills, encoding, SAST hygiene, and PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $invisibleRegex = '[\u200B-\u200F\u202A-\u202E\u2066-\u2069]|\uDB40[\uDC00-\uDC7F]'
+          $tracked = @(git ls-files)
+          if ($tracked.Count -eq 0) { throw 'No tracked files found.' }
+
+          foreach ($rel in $tracked) {
+            $full = Join-Path (Get-Location).Path $rel
+            $bytes = [IO.File]::ReadAllBytes($full)
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+              throw "UTF-8 BOM detected in $rel"
+            }
+            $text = [Text.Encoding]::UTF8.GetString($bytes)
+            if ($text -match $invisibleRegex) {
+              throw "Invisible or Bidi Unicode character detected in $rel"
+            }
+          }
+
+          $skillDirs = Get-ChildItem -Path './skills' -Directory
+          if ($skillDirs.Count -lt 4) { throw 'Expected at least 4 skills.' }
+          foreach ($dir in $skillDirs) {
+            $mdPath = Join-Path $dir.FullName 'SKILL.md'
+            if (!(Test-Path -LiteralPath $mdPath -PathType Leaf)) {
+              throw "Missing SKILL.md in $($dir.Name)"
+            }
+            $md = Get-Content -LiteralPath $mdPath -Raw -Encoding UTF8
+            if ($md -notmatch "(?ms)^---\r?\n.*?^name:\s*$($dir.Name)\s*\r?\n.*?^description:") {
+              throw "Invalid frontmatter in $($dir.Name)/SKILL.md"
+            }
+          }
+
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path './skills/github-open-source-release/scripts/check-release.ps1').Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            throw "PowerShell syntax error in check-release.ps1: $($errors[0].Message)"
+          }
+          Write-Output "PASS: $($tracked.Count) files checked, $($skillDirs.Count) skills validated, 0 syntax errors."

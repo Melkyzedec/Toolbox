@@ -104,6 +104,23 @@ function Test-InspectableTextBytes {
     return $true
 }
 
+function Assert-SafeEmailsInLine {
+    param(
+        [string]$Line,
+        [string]$ErrorReason = 'dlp-pii'
+    )
+
+    foreach ($m in [regex]::Matches($Line, $EmailExtractRegex)) {
+        $localPart = $m.Groups[1].Value
+        $domainPart = $m.Groups[2].Value
+        if ($localPart -imatch '^canary_test_') { continue }
+        if ($localPart -ieq 'noreply' -and $domainPart -ieq 'github.com') { continue }
+        if ($domainPart -notmatch $AllowedEmailDomainRegex) {
+            throw $ErrorReason
+        }
+    }
+}
+
 function Invoke-DlpCheckOnText {
     param([string]$Text)
 
@@ -118,14 +135,7 @@ function Invoke-DlpCheckOnText {
         if ($line -match $IbanFrRegex -or $line -match $NirFrRegex) {
             throw 'dlp-pii'
         }
-        foreach ($m in [regex]::Matches($line, $EmailExtractRegex)) {
-            $localPart = $m.Groups[1].Value
-            $domainPart = $m.Groups[2].Value
-            if ($localPart -imatch '^canary_test_') { continue }
-            if ($domainPart -notmatch $AllowedEmailDomainRegex) {
-                throw 'dlp-pii'
-            }
-        }
+        Assert-SafeEmailsInLine -Line $line -ErrorReason 'dlp-pii'
     }
 }
 
@@ -364,6 +374,14 @@ try {
         foreach ($entry in (($trackedRes.output -join '') -split [char]0)) {
             if ($entry) { Assert-PublicPath $entry }
         }
+        $stage = 'git-identity'
+        $gitLogRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'log', '--all', '--format=%ae%n%ce%n%B')
+        if ($gitLogRes.exitCode -ne 0) { throw 'git-history-unavailable' }
+        foreach ($logLine in @($gitLogRes.output)) {
+            $lineStr = [string]$logLine
+            if (!$lineStr) { continue }
+            Assert-SafeEmailsInLine -Line $lineStr -ErrorReason 'git-personal-email'
+        }
         $stage = 'git-secrets'
         Invoke-SecretScan -Mode git -Target $repo -Options @('--log-opts=--all --full-history --no-ext-diff --no-textconv')
         $gitHistory = 'checked'
@@ -385,7 +403,8 @@ try {
         'linked-entry', 'linked-artifact', 'empty-artifact', 'unsupported-artifact',
         'archive-too-large', 'archive-too-deep', 'missing-policy', 'scanner-unavailable',
         'scanner-error', 'invalid-or-shallow-git', 'invalid-git-root',
-        'project-scan-exceptions', 'git-files-unavailable', 'artifact-changed'
+        'project-scan-exceptions', 'git-files-unavailable', 'git-history-unavailable',
+        'git-personal-email', 'artifact-changed'
     )
     $msg = [string]$_.Exception.Message
     $reason = if ($knownReasons -contains $msg) { $msg } else { 'check-unavailable-or-invalid-input' }
