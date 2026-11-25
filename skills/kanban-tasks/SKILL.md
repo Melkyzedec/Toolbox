@@ -64,3 +64,4 @@ Toutes les commandes acceptent `--dir <dossier-tableau>` et `--json`.
 ## 6. Références
 - Schéma complet (`kanban.json`, frontmatter YAML plat, `history`, `batch --stdin`, compatibilité Obsidian) : `references/schema.md`.
 - Cartographie des processus & architecture : `references/processus.md`.
+- Règle d'entrée d'un projet dans un Kanban multi-projets (projets suivis, exclus et motif) : `references/entree-projets.md`.

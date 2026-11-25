@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -714,6 +715,62 @@ class TestKanbanTasks(unittest.TestCase):
             self.assertTrue(parsed.strict_port)
         finally:
             blocker.server_close()
+
+    def test_18_compact_cards_clamp_title_full_text_on_hover(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init"]).returncode, 0)
+        long_title = "CANARY_TEST_" + " ".join(["titre tres long"] * 20)
+        res = run_cli(self.board_dir, ["add", "--title", long_title, "--tags", "CANARY_TEST_tag"])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(run_cli(self.board_dir, ["render"]).returncode, 0)
+        html_text = (self.board_dir / "kanban.html").read_text(encoding="utf-8")
+
+        rule = re.search(r"\.card-title\s*\{([^}]*)\}", html_text)
+        self.assertIsNotNone(rule, "regle .card-title introuvable")
+        css = rule.group(1)
+        self.assertIn("-webkit-line-clamp: 2", css)
+        self.assertIn("line-clamp: 2", css)
+        self.assertIn("overflow: hidden", css)
+        self.assertIn("-webkit-box-orient: vertical", css)
+        self.assertIn("display: -webkit-box", css)
+
+        self.assertIn('setAttribute("title", t.title)', html_text)
+        self.assertNotIn("innerHTML", html_text)
+        data = json.loads(
+            re.search(r'<script id="kanban-data" type="application/json">(.*?)</script>', html_text, re.S).group(1)
+        )
+        self.assertEqual(data["tasks"][0]["title"], long_title)
+        self.assertIn("m-title", html_text)
+        self.assertIn('document.getElementById("m-title").textContent = t.title', html_text)
+
+    def test_19_project_entry_rule_documented_and_linked(self) -> None:
+        skill_dir = SCRIPT_DIR.parent
+        doc = skill_dir / "references" / "entree-projets.md"
+        self.assertTrue(doc.exists(), "references/entree-projets.md manquant")
+        text = doc.read_text(encoding="utf-8")
+        for needle in ("produit", "media_business", "active", "client_pme", "exclus", "motif"):
+            self.assertIn(needle, text)
+        self.assertIn("au moins un élément actif", text)
+        self.assertNotIn("http://", text)
+        self.assertNotIn("https://", text)
+        skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("references/entree-projets.md", skill_md)
+
+    def test_20_short_titles_unchanged_and_html_stays_offline(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init"]).returncode, 0)
+        short_title = "MIS-2026-CANARY_TEST_001 · Titre court"
+        res = run_cli(self.board_dir, ["add", "--title", short_title, "--tags", "CANARY_TEST_tag"])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(run_cli(self.board_dir, ["render"]).returncode, 0)
+        html_text = (self.board_dir / "kanban.html").read_text(encoding="utf-8")
+        data = json.loads(
+            re.search(r'<script id="kanban-data" type="application/json">(.*?)</script>', html_text, re.S).group(1)
+        )
+        self.assertEqual(data["tasks"][0]["title"], short_title)
+        self.assertIn('el("div", "card-title", t.title)', html_text)
+        self.assertNotIn("innerHTML", html_text)
+        self.assertNotIn("eval(", html_text)
+        self.assertNotIn("http://", html_text)
+        self.assertNotIn("https://", html_text)
 
 
 if __name__ == "__main__":
