@@ -39,7 +39,7 @@ jobs:
           }
 
           $skillDirs = Get-ChildItem -Path './skills' -Directory
-          if ($skillDirs.Count -lt 4) { throw 'Expected at least 4 skills.' }
+          if ($skillDirs.Count -lt 5) { throw 'Expected at least 5 skills.' }
           foreach ($dir in $skillDirs) {
             $mdPath = Join-Path $dir.FullName 'SKILL.md'
             if (!(Test-Path -LiteralPath $mdPath -PathType Leaf)) {
@@ -62,3 +62,7 @@ jobs:
             throw "PowerShell syntax error in check-release.ps1: $($errors[0].Message)"
           }
           Write-Output "PASS: $($tracked.Count) files checked, $($skillDirs.Count) skills validated, 0 syntax errors."
+
+      - name: Run kanban-tasks unit tests (Python stdlib, 0 USD)
+        shell: pwsh
+        run: python -B ./skills/kanban-tasks/scripts/test_kanban.py -v
