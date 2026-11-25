@@ -10,6 +10,7 @@ Catalogue open source de **skills** et d'outils réutilisables pour assistants d
 | **`qa-hostile-tests`** | [`skills/qa-hostile-tests/`](./skills/qa-hostile-tests/) | Conçoit et exécute une batterie de tests hostiles boîte noire à `0 USD` (Pré-Dev TDD `Red -> Green` ou Mission 0 de reprise `Brownfield Gate`, cohérence d'état, sabotage d'entrées, pièges Windows, canaris DLP `CANARY_TEST_` et scan SAST). |
 | **`test-benchmark-audit`** | [`skills/test-benchmark-audit/`](./skills/test-benchmark-audit/) | Audite de manière hostile les suites de tests, oracles, garde-fous sécurité/RGPD/DLP/SAST et benchmarks A/B LLM (Mode 1 Audit & `Brownfield Gate`, Mode 2 Correction par tranches TDD `Red -> Green`, Mode 3 Réception globale et porte `check-release.ps1`). |
 | **`mon-standard-skill`** | [`skills/mon-standard-skill/`](./skills/mon-standard-skill/) | Standard d'architecture, de sécurité (`Skill-Scanner`, DLP, `Safety-Net`), de cycle de vie en 3 zones et de synchronisation multi-outils Windows (`UTF-8` sans BOM, SHA-256 vérifiés et archives `.zip` POSIX pour Claude Desktop). |
+| **`kanban-tasks`** | [`skills/kanban-tasks/`](./skills/kanban-tasks/) | Gère un tableau Kanban Markdown local (1 fichier `.md` par carte, compatible Obsidian `KANBAN.md`), vues interactives Kanban/Horizons/Frise, dépendances, pièces jointes, réglages de libellés et serveur web local `127.0.0.1` (`serve --open`) sans dépendance externe (Python 3 stdlib, 17 tests automatisés). |
 
 ---
 
@@ -31,6 +32,14 @@ Copy-Item -Path ".\skills\github-open-source-release" -Destination "$HOME\.claud
 
 ### 2. Claude Desktop (Import `.zip`)
 Compressez le dossier `skills/<nom-skill>` en une archive `.zip` contenant le dossier racine `<nom-skill>/` avec des chemins POSIX (`/`), puis importez-la dans les paramètres de Claude Desktop.
+
+### 3. Premier essai rapide (`kanban-tasks`)
+Aucune tâche préenregistrée ni donnée de démo n'est incluse dans le dépôt : vous démarrez avec un tableau vierge.
+
+```powershell
+python -B ./skills/kanban-tasks/scripts/kanban.py --dir ./mon-kanban init --title "Mon tableau"
+python -B ./skills/kanban-tasks/scripts/kanban.py --dir ./mon-kanban serve --open
+```
 
 ---
 
