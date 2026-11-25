@@ -49,8 +49,9 @@ Utilise cette skill pour une première publication, une mise à jour publique ou
 - Vérifie après diffusion la visibilité, la branche et le commit distants, la présence de la licence, et les empreintes des fichiers joints si la publication en contient. Pour un dépôt public, vérifie aussi l’accès sans identifiants. Confirme le fichier de licence même si le badge GitHub tarde à apparaître.
 - Relève les protections réellement actives et propose les éventuels écarts : blocage des secrets à l’envoi, alertes de dépendances, analyse du code (`CodeQL`), CI de tests déterministe (`0 €` sur dépôt public) et protection de la branche principale avec `enforce_admins`. Si leur configuration est autorisée, vérifie à nouveau chaque état après changement. Pour GitHub Actions, limite les droits du jeton et épingle les actions externes à un commit complet. Garde les réglages personnels du compte hors du périmètre de publication.
 
-## Documentation officielle
+## Documentation officielle & Références
 
+- Cartographie des processus & porte `check-release.ps1` : `references/processus.md`.
 - [Connexion GitHub CLI](https://cli.github.com/manual/gh_auth_login) · [Créer un dépôt avec GitHub CLI](https://cli.github.com/manual/gh_repo_create)
 - [Lancer un projet open source](https://opensource.guide/starting-a-project/) · [Choisir et déclarer une licence](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)
 - [Adresse de commit GitHub](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address) · [Fonctionnement des Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)

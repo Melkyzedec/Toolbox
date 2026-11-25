@@ -63,3 +63,9 @@ Termine toujours par ce bilan structuré, directement exploitable même par un n
 2. **Ce qui passe** *(commandes exactes jouées, compteurs `X/X`, statut `check-release.ps1 -Fast` si exécuté, et ce que ces tests prouvent réellement)*.
 3. **Les failles ou incohérences logiques provoquées** *(gravité, scénario concret qui casse, comportement observé vs attendu, fichier:ligne fautif)*.
 4. **Propositions de correctifs** *(pour chaque faille trouvée : cause racine précise et correctif recommandé concret, prêt à transmettre à l'agent Dev pour son jalon TDD `Red -> Green` — ou confirmation qu'aucun correctif n'est requis si 100 % sain)*.
+
+---
+
+## 3. Références
+- Matrice des attaques hostiles : `references/matrice-tests-hostiles.md`.
+- Cartographie des processus : `references/processus.md`.
