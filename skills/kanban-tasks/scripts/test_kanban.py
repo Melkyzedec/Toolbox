@@ -731,6 +731,7 @@ class TestKanbanTasks(unittest.TestCase):
         self.assertIn("line-clamp: 2", css)
         self.assertIn("overflow: hidden", css)
         self.assertIn("-webkit-box-orient: vertical", css)
+        self.assertIn("display: -webkit-box", css)
 
         self.assertIn('setAttribute("title", t.title)', html_text)
         self.assertNotIn("innerHTML", html_text)
