@@ -1010,7 +1010,17 @@ main { padding: 16px 20px 28px; }
 .card.prio-basse { opacity: 0.88; }
 .card-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 5px; }
 .card-id { font-size: 0.76rem; font-weight: 700; color: var(--accent); }
-.card-title { font-weight: 600; font-size: 0.92rem; margin-bottom: 6px; }
+.card-title {
+  font-weight: 600;
+  font-size: 0.92rem;
+  margin-bottom: 6px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .badges { display: flex; flex-wrap: wrap; gap: 4px; }
 .badge {
   font-size: 0.72rem;
@@ -1860,7 +1870,9 @@ main { padding: 16px 20px 28px; }
     });
     top.appendChild(copyBtn);
     card.appendChild(top);
-    card.appendChild(el("div", "card-title", t.title));
+    var cardTitle = el("div", "card-title", t.title);
+    cardTitle.setAttribute("title", t.title);
+    card.appendChild(cardTitle);
 
     if (t.blocked) {
       card.appendChild(el("div", "card-context", "Bloqué : " + (t.blocked_reason || "motif non précisé")));
