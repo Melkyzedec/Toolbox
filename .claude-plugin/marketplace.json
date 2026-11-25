@@ -1,0 +1,24 @@
+{
+  "name": "melkyzedec-toolbox",
+  "description": "Marketplace open source des skills développeur Melkyzedec/Toolbox.",
+  "owner": {
+    "name": "Melkyzedec",
+    "url": "https://github.com/Melkyzedec"
+  },
+  "plugins": [
+    {
+      "name": "toolbox",
+      "source": "./",
+      "description": "Catalogue open source de 5 skills développeur : publication GitHub sécurisée, tests hostiles QA, audit de tests, standard de skills et Kanban Markdown local.",
+      "category": "development",
+      "tags": [
+        "skills",
+        "developer-tools",
+        "open-source",
+        "qa",
+        "security",
+        "kanban"
+      ]
+    }
+  ]
+}

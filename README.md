@@ -18,22 +18,70 @@ Catalogue open source de **skills** et d'outils réutilisables pour assistants d
 
 Chaque skill située dans `skills/<nom-skill>/` suit le format standard (`SKILL.md` avec frontmatter YAML + dossiers `references/` ou `scripts/` éventuels).
 
-### 1. Claude Code / Google Antigravity / OpenAI Codex
-Copiez le dossier de la skill souhaitée dans votre répertoire de skills (global ou local au projet) :
+### Tout installer en une commande
 
-- **Claude Code :** `~/.claude/skills/<nom-skill>/`
-- **Google Antigravity :** `<dossier-config-antigravity>/skills/<nom-skill>/` (ou `.agents/skills/<nom-skill>/` dans un projet)
-- **OpenAI Codex :** `<dossier-config-codex>/skills/<nom-skill>/`
+- **Google Antigravity (plugin natif via `.antigravity-plugin/plugin.json`) :**
 
-```powershell
-# Exemple sous Windows PowerShell pour github-open-source-release
-Copy-Item -Path ".\skills\github-open-source-release" -Destination "$HOME\.claude\skills\github-open-source-release" -Recurse -Force
+```bash
+agy plugin install https://github.com/Melkyzedec/Toolbox
 ```
 
-### 2. Claude Desktop (Import `.zip`)
-Compressez le dossier `skills/<nom-skill>` en une archive `.zip` contenant le dossier racine `<nom-skill>/` avec des chemins POSIX (`/`), puis importez-la dans les paramètres de Claude Desktop.
+- **Claude Code (plugin via `.claude-plugin/marketplace.json` et `.claude-plugin/plugin.json`) :**
 
-### 3. Premier essai rapide (`kanban-tasks`)
+  - **En une commande** :
+    ```bash
+    # Terminal (requiert Claude Code v2.1.292+)
+    claude plugin install toolbox --marketplace Melkyzedec/Toolbox
+    ```
+    ```text
+    # Session interactive Claude Code (requiert Claude Code v2.1.275+)
+    /plugin install toolbox --marketplace Melkyzedec/Toolbox
+    ```
+  - **En deux étapes** (toutes versions prenant en charge les plugins) :
+    ```bash
+    # Terminal
+    claude plugin marketplace add Melkyzedec/Toolbox
+    claude plugin install toolbox@melkyzedec-toolbox
+    ```
+    ```text
+    # Session interactive Claude Code
+    /plugin marketplace add Melkyzedec/Toolbox
+    /plugin install toolbox@melkyzedec-toolbox
+    ```
+
+- **Copie directe des 5 skills dans votre projet (`.agents/skills/` pour Antigravity & OpenAI Codex) ou en global Claude Code (`~/.claude/skills/`) :**
+
+```powershell
+# Windows PowerShell — installer les 5 skills dans le projet courant (.agents/skills/)
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ("toolbox-" + [Guid]::NewGuid().ToString("N")); git clone --depth 1 https://github.com/Melkyzedec/Toolbox.git $tmp; New-Item -ItemType Directory -Path ".agents/skills" -Force | Out-Null; Copy-Item -Path "$tmp/skills/*" -Destination ".agents/skills" -Recurse -Force; Remove-Item -Path $tmp -Recurse -Force
+```
+
+```bash
+# macOS / Linux (Bash) — installer les 5 skills dans le projet courant (.agents/skills/)
+tmp="$(mktemp -d)" && git clone --depth 1 https://github.com/Melkyzedec/Toolbox.git "$tmp" && mkdir -p .agents/skills && cp -R "$tmp/skills/." .agents/skills/ && rm -rf "$tmp"
+```
+
+> Pour installer globalement dans **Claude Code** au lieu du projet courant, remplacez `.agents/skills` par `$HOME\.claude\skills` (PowerShell) ou `~/.claude/skills` (Bash). Pour une installation globale dans Antigravity ou OpenAI Codex, remplacez `.agents/skills` par `<dossier-config-antigravity>/skills` ou `<dossier-config-codex>/skills`.
+
+### Prompt prêt à copier pour demander l'installation à un assistant
+
+Copiez-collez ce prompt dans **Antigravity**, **Claude Code** ou **OpenAI Codex** :
+
+```text
+Installe les 5 skills open source du dépôt https://github.com/Melkyzedec/Toolbox (`github-open-source-release`, `kanban-tasks`, `mon-standard-skill`, `qa-hostile-tests`, `test-benchmark-audit`) en choisissant la méthode native adaptée à ton environnement :
+1. Si tu es Google Antigravity : vérifie/installe le plugin via `agy plugin install https://github.com/Melkyzedec/Toolbox` (ou copie `skills/*` dans `.agents/skills/` si le projet est local).
+2. Si tu es Claude Code : installe le plugin via `claude plugin install toolbox --marketplace Melkyzedec/Toolbox` (v2.1.292+, ou en deux étapes avec `claude plugin marketplace add Melkyzedec/Toolbox` puis `claude plugin install toolbox@melkyzedec-toolbox` ; ou copie `skills/*` dans `~/.claude/skills/`).
+3. Si tu es OpenAI Codex (ou pour un dépôt partagé) : clone en `--depth 1` dans un dossier temporaire nettoyé à la fin et copie `skills/*` dans `.agents/skills/` (ou le dossier skills configuré de l'outil).
+Règles strictes : n'exécute aucun script téléchargé à la volée, n'écris pas de chemin machine personnel en dur, puis vérifie que les 5 `SKILL.md` sont présents et lance `python -B ./scripts/test_packaging.py -v` (si le dépôt local est conservé) pour confirmer que tout passe à 0 USD.
+```
+
+### Claude Desktop (Import `.zip`)
+
+1. Téléchargez les archives individuelles `<nom-skill>-claude-desktop.zip` et `SHA256SUMS.txt` depuis la section **[Releases](https://github.com/Melkyzedec/Toolbox/releases)** du dépôt (ou générez-les localement avec `python -B ./scripts/package-skills.py --out ./dist/v1.0.0`).
+2. Vérifiez l'empreinte SHA-256 avant import (`Get-FileHash <archive>.zip -Algorithm SHA256` sous PowerShell ou `sha256sum -c SHA256SUMS.txt`).
+3. Dans **Claude Desktop**, activez *Code execution and file creation* (**Settings > Capabilities**), ouvrez **Customize > Skills > Add skill > Upload a skill** et importez chaque archive `.zip`.
+
+### Premier essai rapide (`kanban-tasks`)
 Aucune tâche préenregistrée ni donnée de démo n'est incluse dans le dépôt : vous démarrez avec un tableau vierge.
 
 ```powershell

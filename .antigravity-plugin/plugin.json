@@ -1,0 +1,27 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "toolbox",
+  "displayName": "Toolbox",
+  "version": "1.0.0",
+  "description": "Catalogue open source de 5 skills développeur : publication GitHub sécurisée, tests hostiles QA, audit de tests, standard de skills et Kanban Markdown local.",
+  "suggestedPrompts": [
+    "Prépare et vérifie la publication open source de ce dépôt avec github-open-source-release",
+    "Lance une batterie de tests hostiles boîte noire à 0 USD avec qa-hostile-tests",
+    "Initialise et ouvre un tableau Kanban Markdown local avec kanban-tasks"
+  ],
+  "author": {
+    "name": "Melkyzedec",
+    "url": "https://github.com/Melkyzedec"
+  },
+  "homepage": "https://github.com/Melkyzedec/Toolbox",
+  "repository": "https://github.com/Melkyzedec/Toolbox",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "developer-tools",
+    "open-source",
+    "qa",
+    "security",
+    "kanban"
+  ]
+}
