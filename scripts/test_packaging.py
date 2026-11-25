@@ -201,6 +201,10 @@ class TestReadme(unittest.TestCase):
         self.assertIn("Prompt", text)
         self.assertIn("agy plugin install https://github.com/Melkyzedec/Toolbox", text)
         self.assertIn("claude plugin install toolbox --marketplace Melkyzedec/Toolbox", text)
+        self.assertIn("v2.1.292+", text)
+        self.assertIn("v2.1.275+", text)
+        self.assertIn("claude plugin marketplace add Melkyzedec/Toolbox", text)
+        self.assertIn("claude plugin install toolbox@melkyzedec-toolbox", text)
         for skill in EXPECTED_SKILLS:
             self.assertIn(skill, text)
 

@@ -28,16 +28,26 @@ agy plugin install https://github.com/Melkyzedec/Toolbox
 
 - **Claude Code (plugin via `.claude-plugin/marketplace.json` et `.claude-plugin/plugin.json`) :**
 
-```bash
-# En une commande depuis le terminal (Claude Code v2.1.292+)
-claude plugin install toolbox --marketplace Melkyzedec/Toolbox
-```
-
-```text
-# Ou en session interactive Claude Code
-/plugin marketplace add Melkyzedec/Toolbox
-/plugin install toolbox@melkyzedec-toolbox
-```
+  - **En une commande** :
+    ```bash
+    # Terminal (requiert Claude Code v2.1.292+)
+    claude plugin install toolbox --marketplace Melkyzedec/Toolbox
+    ```
+    ```text
+    # Session interactive Claude Code (requiert Claude Code v2.1.275+)
+    /plugin install toolbox --marketplace Melkyzedec/Toolbox
+    ```
+  - **En deux étapes** (toutes versions prenant en charge les plugins) :
+    ```bash
+    # Terminal
+    claude plugin marketplace add Melkyzedec/Toolbox
+    claude plugin install toolbox@melkyzedec-toolbox
+    ```
+    ```text
+    # Session interactive Claude Code
+    /plugin marketplace add Melkyzedec/Toolbox
+    /plugin install toolbox@melkyzedec-toolbox
+    ```
 
 - **Copie directe des 5 skills dans votre projet (`.agents/skills/` pour Antigravity & OpenAI Codex) ou en global Claude Code (`~/.claude/skills/`) :**
 
@@ -60,7 +70,7 @@ Copiez-collez ce prompt dans **Antigravity**, **Claude Code** ou **OpenAI Codex*
 ```text
 Installe les 5 skills open source du dépôt https://github.com/Melkyzedec/Toolbox (`github-open-source-release`, `kanban-tasks`, `mon-standard-skill`, `qa-hostile-tests`, `test-benchmark-audit`) en choisissant la méthode native adaptée à ton environnement :
 1. Si tu es Google Antigravity : vérifie/installe le plugin via `agy plugin install https://github.com/Melkyzedec/Toolbox` (ou copie `skills/*` dans `.agents/skills/` si le projet est local).
-2. Si tu es Claude Code : installe le plugin via `claude plugin install toolbox --marketplace Melkyzedec/Toolbox` (ou copie `skills/*` dans `~/.claude/skills/`).
+2. Si tu es Claude Code : installe le plugin via `claude plugin install toolbox --marketplace Melkyzedec/Toolbox` (v2.1.292+, ou en deux étapes avec `claude plugin marketplace add Melkyzedec/Toolbox` puis `claude plugin install toolbox@melkyzedec-toolbox` ; ou copie `skills/*` dans `~/.claude/skills/`).
 3. Si tu es OpenAI Codex (ou pour un dépôt partagé) : clone en `--depth 1` dans un dossier temporaire nettoyé à la fin et copie `skills/*` dans `.agents/skills/` (ou le dossier skills configuré de l'outil).
 Règles strictes : n'exécute aucun script téléchargé à la volée, n'écris pas de chemin machine personnel en dur, puis vérifie que les 5 `SKILL.md` sont présents et lance `python -B ./scripts/test_packaging.py -v` (si le dépôt local est conservé) pour confirmer que tout passe à 0 USD.
 ```
