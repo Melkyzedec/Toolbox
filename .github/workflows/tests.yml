@@ -66,3 +66,7 @@ jobs:
       - name: Run kanban-tasks unit tests (Python stdlib, 0 USD)
         shell: pwsh
         run: python -B ./skills/kanban-tasks/scripts/test_kanban.py -v
+
+      - name: Run packaging and manifest validation tests (Python stdlib, 0 USD)
+        shell: pwsh
+        run: python -B ./scripts/test_packaging.py -v
