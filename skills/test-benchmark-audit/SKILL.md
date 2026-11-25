@@ -64,3 +64,9 @@ Tu agis comme un **auditeur externe sceptique** (fiabilité logicielle, *mutatio
 2. **Contre-test *mutation* (`Red -> Green`) :** pour chaque correctif `Critique` / `Haute`, vérifie (par lecture ciblée ou test d'échec en environnement temporaire) que le nouveau test échoue réellement si la faille ou la régression réapparaît.
 3. **Re-test global & Porte déterministe DLP/SAST/Secrets (`0 USD`, isolé) :** après la toute dernière modification (code, tests, scripts, manifests/sync), lance **100 % des suites locales du dépôt** (JS, PowerShell, Python, CLI réel en sous-processus, `--dry-run`, vérification de sync/manifeste), jamais une sélection filtrée sur la seule dernière tranche. Exécute en complément le scanner déterministe `check-release.ps1` (`-Fast` en recette courante ou complet avec `-GitRoot` avant publication) pour garantir `"status": "passed"` (zéro secret, zéro PII/chemin privé hors `CANARY_TEST_`, zéro Unicode invisible ou pattern SAST).
 4. **Procès-verbal de réception (`## 6. Clôture & Contre-vérification globale` dans le `.md`) :** consigne la date, les commandes exactes exécutées après la dernière modif, les compteurs bruts (`X/X PASS`), le résultat JSON de `check-release.ps1`, l'état Git/sync, la liste des réserves éventuelles (ex. tests live LLM payants non rejoués à `0 USD`), et un verdict explicite **`Validé`** ou **`Bloquants restants`**.
+
+---
+
+## Références
+- Grille d'audit 7 axes & gabarit de rapport : `references/grille-audit-hostile.md`.
+- Cartographie des processus : `references/processus.md`.
