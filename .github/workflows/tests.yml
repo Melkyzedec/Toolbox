@@ -63,6 +63,10 @@ jobs:
           }
           Write-Output "PASS: $($tracked.Count) files checked, $($skillDirs.Count) skills validated, 0 syntax errors."
 
+      - name: Run mutation-check tests (Windows PowerShell, 0 USD)
+        shell: powershell
+        run: powershell -NoProfile -File ./tests/test-mutation-check.ps1
+
       - name: Run kanban-tasks unit tests (Python stdlib, 0 USD)
         shell: pwsh
         run: python -B ./skills/kanban-tasks/scripts/test_kanban.py -v
