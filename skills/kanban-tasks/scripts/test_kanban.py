@@ -772,6 +772,60 @@ class TestKanbanTasks(unittest.TestCase):
         self.assertNotIn("http://", html_text)
         self.assertNotIn("https://", html_text)
 
+    def test_21_codeql_path_injection_and_http_header_hardening(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init", "--title", "CANARY_TEST_CodeQL"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_Sec", "--status", "a_faire"]).returncode, 0)
+
+        # Static MIME table must cover every allowed attachment extension
+        self.assertTrue(hasattr(kanban, "SAFE_ATTACHMENT_MIME_TYPES"))
+        self.assertEqual(set(kanban.SAFE_ATTACHMENT_MIME_TYPES.keys()), set(kanban.SAFE_ATTACHMENT_EXTS))
+
+        # safe_task_path must reject traversal, separators, CRLF, NUL, and dot segments
+        tasks_dir = self.board_dir / "tasks"
+        for bad_name in ("", ".", "..", "../escape.md", "sub/file.md", "sub\\file.md", "bad\r\n.md", "bad\x00.md"):
+            with self.assertRaises(kanban.KanbanError, msg=f"Should reject {bad_name!r}"):
+                kanban.safe_task_path(tasks_dir, bad_name)
+
+        # Serve GET /attachments must enforce strict filename whitelist and static MIME headers
+        httpd, token = kanban.create_serve_httpd(self.board_dir, port=0)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            b64_ok = base64.b64encode(b"CANARY_TEST_payload").decode("ascii")
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/upload",
+                data=json.dumps({"id": "T-001", "filename": "rapport.md", "content_base64": b64_ok}).encode("utf-8"),
+                headers={"Content-Type": "application/json", "X-Kanban-Token": token},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                self.assertEqual(resp.status, 200)
+
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/attachments/T-001/rapport.md", timeout=5) as gresp:
+                self.assertEqual(gresp.status, 200)
+                self.assertEqual(gresp.headers.get("Content-Type"), "text/markdown; charset=utf-8")
+                self.assertEqual(gresp.headers.get("Content-Disposition"), 'attachment; filename="rapport.md"')
+                self.assertEqual(gresp.headers.get("X-Content-Type-Options"), "nosniff")
+                self.assertEqual(gresp.read(), b"CANARY_TEST_payload")
+
+            # Hostile attachment names (traversal, quotes, CRLF-encoded, spaces) must be rejected cleanly
+            for hostile_url in (
+                f"http://127.0.0.1:{port}/attachments/T-001/..%2frapport.md",
+                f"http://127.0.0.1:{port}/attachments/T-001/evil%22name.txt",
+                f"http://127.0.0.1:{port}/attachments/T-001/evil%0d%0aX-Injected:1.txt",
+                f"http://127.0.0.1:{port}/attachments/T-001/bad%20name.txt",
+            ):
+                with self.assertRaises(urllib.error.HTTPError, msg=f"Should reject {hostile_url}") as ctx:
+                    urllib.request.urlopen(hostile_url, timeout=5)
+                self.assertIn(ctx.exception.code, (400, 403, 404))
+                self.assertIsNone(ctx.exception.headers.get("X-Injected"))
+                ctx.exception.close()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

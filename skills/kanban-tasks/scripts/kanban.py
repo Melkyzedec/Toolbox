@@ -11,7 +11,6 @@ import hashlib
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import mimetypes
 import os
 from pathlib import Path
 import re
@@ -92,6 +91,19 @@ CHECKBOX_RE = re.compile(r"^(\s*[-*]\s+\[)([ xX])(\]\s+.*)$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 ISO_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|\+00:00)$")
 SAFE_ATTACHMENT_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".txt", ".md", ".csv", ".json"}
+SAFE_ATTACHMENT_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+}
+SAFE_ATTACHMENT_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 RASTER_ATTACHMENT_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 
@@ -175,11 +187,22 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 
 def safe_task_path(base_dir: Path, filename: str) -> Path:
-    resolved_base = base_dir.resolve()
-    target = (resolved_base / filename).resolve()
-    if target.parent != resolved_base:
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or filename in (".", "..")
+        or ".." in filename
+        or any(ch in filename for ch in ("/", "\\", "\x00", "\r", "\n"))
+    ):
         raise KanbanError(f"Chemin de tâche non autorisé : {filename}")
-    return target
+    base_str = os.path.normpath(os.path.realpath(str(base_dir)))
+    candidate_str = os.path.normpath(os.path.join(base_str, filename))
+    if not candidate_str.startswith(base_str + os.sep):
+        raise KanbanError(f"Chemin de tâche non autorisé : {filename}")
+    real_str = os.path.normpath(os.path.realpath(candidate_str))
+    if not real_str.startswith(base_str + os.sep) or os.path.dirname(real_str) != base_str:
+        raise KanbanError(f"Chemin de tâche non autorisé : {filename}")
+    return Path(real_str)
 
 
 class BoardLock:
@@ -3486,23 +3509,28 @@ def _op_attach(
             raise KanbanError("Précisez un fichier (--file) ou une référence (--ref)")
 
         safe_name = sanitize_attachment_name(orig_name)
-        att_root = (board_dir / "attachments").resolve()
-        att_dir = (att_root / tid).resolve()
-        if att_dir.parent != att_root:
+        if not SAFE_ATTACHMENT_FILENAME_RE.fullmatch(safe_name) or ".." in safe_name:
+            raise KanbanError("Nom de pièce jointe invalide")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", tid):
+            raise KanbanError("Identifiant de tâche invalide")
+        att_root_str = os.path.normpath(os.path.realpath(str(board_dir / "attachments")))
+        att_dir_str = os.path.normpath(os.path.join(att_root_str, tid))
+        if not att_dir_str.startswith(att_root_str + os.sep):
             raise KanbanError("Dossier de pièce jointe invalide")
-        att_dir.mkdir(parents=True, exist_ok=True)
-        dest = safe_task_path(att_dir, safe_name)
-        fd, tmp_name = tempfile.mkstemp(prefix=f".{safe_name}.", suffix=".tmp", dir=str(att_dir))
-        tmp_path = Path(tmp_name)
+        os.makedirs(att_dir_str, exist_ok=True)
+        dest_str = os.path.normpath(os.path.join(att_dir_str, safe_name))
+        if not dest_str.startswith(att_dir_str + os.sep):
+            raise KanbanError("Chemin de pièce jointe invalide")
+        fd, tmp_name = tempfile.mkstemp(prefix=".att-", suffix=".tmp", dir=att_dir_str)
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp_path, dest)
+            os.replace(tmp_name, dest_str)
         except Exception:
             with contextlib.suppress(OSError):
-                tmp_path.unlink()
+                os.unlink(tmp_name)
             raise
         entry = f"attachments/{tid}/{safe_name}"
 
@@ -4390,37 +4418,49 @@ def create_serve_httpd(
                     self._send_json(200, current_payload())
                 elif path.startswith("/attachments/"):
                     parts = [p for p in path.split("/") if p]
-                    if len(parts) != 3 or not re.match(r"^[A-Za-z0-9_-]+$", parts[1]):
+                    if len(parts) != 3 or not re.fullmatch(r"[A-Za-z0-9_-]+", parts[1]):
                         self._send_json(404, {"ok": False, "error": "Pièce jointe introuvable"})
                         return
                     tid_seg, raw_name = parts[1], parts[2]
+                    if not SAFE_ATTACHMENT_FILENAME_RE.fullmatch(raw_name) or ".." in raw_name:
+                        self._send_json(404, {"ok": False, "error": "Pièce jointe introuvable"})
+                        return
                     ext = Path(raw_name).suffix.lower()
-                    if ext not in SAFE_ATTACHMENT_EXTS:
+                    if ext not in SAFE_ATTACHMENT_MIME_TYPES:
                         self._send_json(403, {"ok": False, "error": "Type de fichier non autorisé"})
                         return
-                    att_root = (board_dir / "attachments").resolve()
-                    att_dir = (att_root / tid_seg).resolve()
-                    if att_dir.parent != att_root or not att_dir.is_dir():
+                    att_root_str = os.path.normpath(os.path.realpath(str(board_dir / "attachments")))
+                    att_dir_str = os.path.normpath(os.path.join(att_root_str, tid_seg))
+                    if not att_dir_str.startswith(att_root_str + os.sep) or not os.path.isdir(att_dir_str):
                         self._send_json(404, {"ok": False, "error": "Pièce jointe introuvable"})
                         return
-                    try:
-                        target = safe_task_path(att_dir, raw_name)
-                    except KanbanError:
+                    matched_name: str | None = None
+                    with os.scandir(att_dir_str) as entries:
+                        for entry in entries:
+                            if entry.name == raw_name and entry.is_file(follow_symlinks=False):
+                                matched_name = entry.name
+                                break
+                    if matched_name is None:
                         self._send_json(404, {"ok": False, "error": "Pièce jointe introuvable"})
                         return
-                    if not target.is_file():
+                    safe_ext = Path(matched_name).suffix.lower()
+                    if safe_ext not in SAFE_ATTACHMENT_MIME_TYPES:
+                        self._send_json(403, {"ok": False, "error": "Type de fichier non autorisé"})
+                        return
+                    target_str = os.path.normpath(os.path.join(att_dir_str, matched_name))
+                    if not target_str.startswith(att_dir_str + os.sep):
                         self._send_json(404, {"ok": False, "error": "Pièce jointe introuvable"})
                         return
-                    data = target.read_bytes()
-                    ctype, _ = mimetypes.guess_type(target.name)
-                    if not ctype:
-                        ctype = "application/octet-stream"
+                    with open(target_str, "rb") as fh:
+                        data = fh.read()
+                    ctype = SAFE_ATTACHMENT_MIME_TYPES[safe_ext]
+                    disp_name = re.sub(r"[^A-Za-z0-9._-]", "_", matched_name)
                     self.send_response(200)
                     self.send_header("Content-Type", ctype)
                     self.send_header("Content-Length", str(len(data)))
                     self.send_header("X-Content-Type-Options", "nosniff")
-                    if ext not in RASTER_ATTACHMENT_EXTS:
-                        self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+                    if safe_ext not in RASTER_ATTACHMENT_EXTS:
+                        self.send_header("Content-Disposition", f'attachment; filename="{disp_name}"')
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
                     self.wfile.write(data)
