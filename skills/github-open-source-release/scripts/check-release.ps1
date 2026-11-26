@@ -21,7 +21,14 @@ $PrivateInternalDirRegex = '(?i)(?<!(?:~|\$HOME|%USERPROFILE%|\$env:USERPROFILE)
 # Personal folders on any drive (client files, synced clouds, documents) and named network shares.
 $PrivateWinPersonalDirRegex = '(?i)\b[A-Z]:[\\/]+(?:[^\\/\r\n"''`<>|:*?]+[\\/]+){0,6}?(?:Clients?|OneDrive[^\\/\r\n]*|Dropbox|Google Drive|Documents|Mes documents|Desktop|Bureau|Downloads|T[ée]l[ée]chargements|Factures|Paie)(?=[\\/]|$|[\s"''`])'
 $PrivateUncShareRegex = '(?i)(?<![\\\w])\\\\(?!(?:localhost|127\.0\.0\.1|wsl\$|wsl\.localhost|server|serveur|host|machine|nas|example[\w.-]*)\\)[A-Za-z0-9][A-Za-z0-9._-]{1,62}\\[^\\\s]+'
-$PhoneFrRegex = '(?<![\d+])(?:\+33\s?[67]|0[67])(?:[\s.-]?\d{2}){4}(?!\d)'
+# A credential written as a literal value: `password = '...'`, "api_key": "...", and in configuration files
+# (YAML, INI, .npmrc, .pypirc...) also an unquoted `secret: value`. Placeholders and environment lookups pass.
+$CredentialKeyPattern = '[\w.-]*(?:pass' + 'word|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|_auth)'
+$HardcodedQuotedRegex = '(?i)(?<![\w])["'']?' + $CredentialKeyPattern + '["'']?\s*[:=]\s*["''](?<v>[^"''\s]{6,})["'']'
+$HardcodedBareRegex = '(?i)(?<![\w])' + $CredentialKeyPattern + '\s*[:=]\s*(?<v>[^\s"''#;,]{6,})\s*$'
+$ConfigFileNameRegex = '(?i)(?:\.(?:ya?ml|ini|cfg|conf|toml|properties|env)$|^\.(?:npmrc|pypirc|netrc)$)'
+$CredentialPlaceholderRegex = '^(?:\$\{|\$\(|\{\{|<|%|\$[A-Z_]|os\.|process\.env|env\(|getenv|changeme|change_me|x{3,}|\*{3,}|example|exemple|placeholder|your[_-]|votre|dummy|fake|redacted|null|none|true|false|undefined)'
+$PhoneFrRegex ='(?<![\d+])(?:\+33\s?[67]|0[67])(?:[\s.-]?\d{2}){4}(?!\d)'
 
 # Well-known credential shapes, also checked by the DLP stage so that a key hidden where gitleaks does not
 # look (UTF-16 text, Office documents, renamed archives) still blocks the release.
@@ -153,8 +160,23 @@ function Assert-SafeEmailsInLine {
     }
 }
 
+function Assert-NoHardcodedCredential {
+    param([string]$Line, [string]$Name)
+
+    $patterns = @($HardcodedQuotedRegex)
+    if ($Name -and $Name -match $ConfigFileNameRegex) { $patterns += $HardcodedBareRegex }
+    foreach ($re in $patterns) {
+        foreach ($m in [regex]::Matches($Line, $re)) {
+            $value = $m.Groups['v'].Value
+            if (!$value -or $value -imatch $CredentialPlaceholderRegex -or $value -imatch 'CANARY_TEST_') { continue }
+            if (($value.ToCharArray() | Select-Object -Unique).Count -le 2) { continue }
+            throw 'hardcoded-credential'
+        }
+    }
+}
+
 function Invoke-DlpCheckOnText {
-    param([string]$Text)
+    param([string]$Text, [string]$Name)
 
     foreach ($line in ($Text -split "\r?\n")) {
         if (!$line) { continue }
@@ -172,6 +194,7 @@ function Invoke-DlpCheckOnText {
             throw 'dlp-pii'
         }
         Assert-SafeEmailsInLine -Line $line -ErrorReason 'dlp-pii'
+        Assert-NoHardcodedCredential -Line $line -Name $Name
     }
 }
 
@@ -245,7 +268,7 @@ function Inspect-ZipArchiveContent {
         $text = Get-ScanText -Bytes $bytes -Name $entry.Name
         if ($null -eq $text) { continue }
         if ($Mode -eq 'dlp') {
-            Invoke-DlpCheckOnText -Text $text
+            Invoke-DlpCheckOnText -Text $text -Name $entry.Name
         } elseif ($Mode -eq 'sast') {
             Invoke-SastCheckOnText -Text $text -RelativePath $entry.FullName
         }
@@ -293,7 +316,7 @@ function Invoke-ArtifactContentScan {
             $text = Get-ScanText -Bytes ([IO.File]::ReadAllBytes($file.FullName)) -Name $file.Name
             if ($null -eq $text) { continue }
             if ($Mode -eq 'dlp') {
-                Invoke-DlpCheckOnText -Text $text
+                Invoke-DlpCheckOnText -Text $text -Name $file.Name
             } elseif ($Mode -eq 'sast') {
                 Invoke-SastCheckOnText -Text $text -RelativePath $relative
             }
@@ -496,7 +519,7 @@ try {
         'archive-too-large', 'archive-too-deep', 'missing-policy', 'scanner-unavailable',
         'scanner-error', 'invalid-or-shallow-git', 'invalid-git-root',
         'project-scan-exceptions', 'git-files-unavailable', 'git-history-unavailable',
-        'git-personal-email', 'artifact-changed', 'unscannable-archive', 'unscanned-text-file', 'sast-homoglyph'
+        'git-personal-email', 'artifact-changed', 'unscannable-archive', 'unscanned-text-file', 'sast-homoglyph', 'hardcoded-credential'
     )
     $msg = [string]$_.Exception.Message
     $reason = if ($knownReasons -contains $msg) { $msg } else { 'check-unavailable-or-invalid-input' }
