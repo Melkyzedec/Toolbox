@@ -126,6 +126,18 @@ try {
   $r = New-Repo 'git-propre'; W $r 'a.txt' "x`n"; git -C $r add -A; git -C $r commit -q -m 'Initial'
   Expect 'CA-08 témoin : historique propre accepté' (New-Candidate $r) 'passed' $r
 
+  # Tranche 3 : mot de passe écrit en dur et jeton dans un fichier de configuration de paquets
+  $pw = 'Soud' + 'ure2026!'   # valeur fictive assemblée pour ne pas se signaler elle-même
+  $d = New-Case 'pw-python'; W $d 'settings.py' ("PASS" + "WORD = '$pw'`n"); Expect 'T3 mot de passe en dur (Python)' $d 'artifact-dlp/hardcoded-credential'
+  $d = New-Case 'pw-js'; W $d 'db.js' ("const db" + "Password = `"$pw`";`n"); Expect 'T3 mot de passe en dur (JavaScript)' $d 'artifact-dlp/hardcoded-credential'
+  $d = New-Case 'pw-json'; W $d 'config.json' ("{ `"api" + "_key`": `"$pw-abc`" }`n"); Expect 'T3 clé en dur (JSON)' $d 'artifact-dlp/hardcoded-credential'
+  $d = New-Case 'pw-yaml'; W $d 'app.yml' ("sec" + "ret: $pw`n"); Expect 'T3 secret en dur (YAML)' $d 'artifact-dlp/hardcoded-credential'
+  $d = New-Case 'npmrc'; W $d '.npmrc' ("//registry.npmjs.org/:_auth" + "Token=" + "npm_" + "fictif1234567890`n"); Expect 'T3 jeton dans .npmrc' $d 'artifact-dlp/hardcoded-credential'
+  $d = New-Case 'pypirc'; W $d '.pypirc' ("[pypi]`nusername = __token__`npass" + "word = " + "pypi-" + "fictif1234567890`n"); Expect 'T3 jeton dans .pypirc' $d 'artifact-dlp/hardcoded-credential'
+  $d = New-Case 'pw-neutres'; W $d 'cfg.py' ("PASS" + "WORD = os.environ['DB_PASSWORD']`ntoken = os.getenv('TOKEN')`npassword = ''`napi_key = '<votre-clé>'`nsecret = '" + '${SECRET}' + "'`npassword = 'changeme'`npassword_field = 'mot de passe'`n"); W $d 'README.md' "Le mot de passe doit faire 12 caractères ; password: voir le gestionnaire.`n"; W $d '.npmrc' "registry=https://registry.npmjs.org/`n//registry.npmjs.org/:_authToken=`${NPM_TOKEN}`n"
+  Expect 'T3 témoin : variables d''environnement, valeurs vides et exemples acceptés' $d 'passed'
+  $d = New-Case 'pw-canary'; W $d 'test_auth.py' ("password = 'CANARY_TEST_motdepasse'`n"); Expect 'T3 témoin : mot de passe fictif CANARY_TEST_ accepté' $d 'passed'
+
   $d = New-Case 'gros-texte'; $sb = New-Object Text.StringBuilder; [void]$sb.Append(('x' * 100 + "`n") * 105000); [IO.File]::WriteAllText((Join-Path $d 'journal.log'), $sb.ToString()); Expect 'CA-05 fichier texte > 10 Mo refusé' $d 'artifact-dlp/unscanned-text-file'
 } finally {
   Remove-Item -Recurse -Force -LiteralPath $root -ErrorAction SilentlyContinue
