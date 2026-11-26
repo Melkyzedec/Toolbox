@@ -22,7 +22,7 @@ Cette skill s'utilise selon deux modes d'entrée :
 ## 1. Règles non négociables
 1. **Ne modifie JAMAIS le code de production :** tu écris et exécutes uniquement des tests (en dossier temporaire isolé nettoyé en `finally`). Si un test révèle un vrai bug dans le programme, **tu gardes le test qui échoue tel quel** — interdiction de contourner le bug en édulcorant le test ou en retouchant le moteur.
 2. **Bouclier `Safety-Net` (`0 token`) & `Zero Untrusted External Code` :**
-   - **Interdiction mécanique de lire/grepper les secrets réels :** n'ouvre jamais `.env*` (hors `.env.example`), `*.pem`, `*.key`, `*vault*.sqlite`, `00-BRUT-CLIENT/`, `.ssh/`, ni des exports clients réels.
+   - **Interdiction de lire/grepper les secrets réels (consigne à doubler d'un verrou d'outil, par exemple un hook `PreToolUse` qui refuse ces chemins) :** n'ouvre jamais `.env*` (hors `.env.example`), `*.pem`, `*.key`, `*vault*.sqlite`, `00-BRUT-CLIENT/`, `.ssh/`, ni des exports clients réels.
    - **Interdiction absolue du code externe non audité :** ne copie-colle jamais de snippets externes non vérifiés et n'exécute jamais d'installateur ou de script distant.
 3. **Zéro appel LLM / API payant (`0 USD`) & Données canaris fictives (`CANARY_TEST_`) :** aucun appel API externe payant ni lancement d'agent live. Utilise exclusivement des exécutions locales, des sous-processus isolés (`%USERPROFILE%`, `%CODEX_HOME%` et données réelles intouchées) et des entrées synthétiques marquées `CANARY_TEST_` / `@example.test`.
 4. **Zéro mock menteur sur le parcours principal :** privilégie le **vrai point d'entrée** (vrai CLI/script/serveur local/base SQLite ou fichiers réels en temp) plutôt que des stubs en mémoire qui recopient les raccourcis du code testé.

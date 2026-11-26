@@ -15,7 +15,13 @@ $MaxScannableTextBytes = 10485760 # 10 MiB
 $PrivateWinCursorRegex = '(?i)\b[A-Z]:' + '[\\/]+' + 'CUR' + 'SOR[\\/]+'
 $PrivateWinUsersRegex = '(?i)\b[A-Z]:' + '[\\/]+' + 'Users' + '[\\/]+(?!(?:Public|Default|All\s*Users)(?:[\\/]|$))[^\s\\/:*?"<>|`''"]+'
 $PrivateUnixUsersRegex = '(?:^|[\s"''`(=:])/(?:Users|home)/(?!(?:runner|ubuntu|root|devcontainer|git|node|docker|vscode)(?:/|$))[a-zA-Z0-9._-]+/'
-$PrivateInternalDirRegex = '(?i)(?:^|[\s"''`(=/\\])(?!(?:~|\$HOME|%USERPROFILE%)[\\/]+)\.(?:memento' + '|codex' + '|gemini)(?:[\\/]|$)'
+# Internal assistant folders (memento, codex, gemini) placed under a concrete parent folder. A bare folder
+# name (a .gitignore entry, a relative mention) and generic home placeholders (~, $HOME, %USERPROFILE%) stay allowed.
+$PrivateInternalDirRegex = '(?i)(?<!(?:~|\$HOME|%USERPROFILE%|\$env:USERPROFILE)[\\/]+)(?<=[\w-][\\/]+)\.(?:memento' + '|codex' + '|gemini)(?:[\\/]|$)'
+# Personal folders on any drive (client files, synced clouds, documents) and named network shares.
+$PrivateWinPersonalDirRegex = '(?i)\b[A-Z]:[\\/]+(?:[^\\/\r\n"''`<>|:*?]+[\\/]+){0,6}?(?:Clients?|OneDrive[^\\/\r\n]*|Dropbox|Google Drive|Documents|Mes documents|Desktop|Bureau|Downloads|T[ée]l[ée]chargements|Factures|Paie)(?=[\\/]|$|[\s"''`])'
+$PrivateUncShareRegex = '(?i)(?<![\\\w])\\\\(?!(?:localhost|127\.0\.0\.1|wsl\$|wsl\.localhost|server|serveur|host|machine|nas|example[\w.-]*)\\)[A-Za-z0-9][A-Za-z0-9._-]{1,62}\\[^\\\s]+'
+$PhoneFrRegex = '(?<![\d+])(?:\+33\s?[67]|0[67])(?:[\s.-]?\d{2}){4}(?!\d)'
 
 # Well-known credential shapes, also checked by the DLP stage so that a key hidden where gitleaks does not
 # look (UTF-16 text, Office documents, renamed archives) still blocks the release.
@@ -25,7 +31,14 @@ $NirFrRegex = '\b[12]\s?\d{2}\s?(?:0[1-9]|1[0-2]|2[0-9])\s?(?:\d{2}|2[AB])\s?\d{
 $EmailExtractRegex = '\b([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b'
 $AllowedEmailDomainRegex = '(?i)^(?:example\.(?:com|org|net|test|edu)|localhost|(?:[a-z0-9-]+\.)*users\.noreply\.github\.com|.*\.(?:test|example|invalid|localhost))$'
 
-$InvisibleUnicodeRegex = '[\u200B-\u200F\u202A-\u202E\u2066-\u2069]|\uDB40[\uDC00-\uDC7F]'
+$InvisibleUnicodeRegex = '[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]|\uDB40[\uDC00-\uDC7F]'
+# A word mixing Latin and Cyrillic letters in code (a look-alike identifier such as "p\u0430ssword").
+$HomoglyphRegex = '[A-Za-z][\u0400-\u04FF]|[\u0400-\u04FF][A-Za-z]'
+$SastCodeExtensionRegex = '(?i)\.(?:ps1|psm1|psd1|mjs|cjs|js|ts|tsx|jsx|py|sh|bash|zsh|bat|cmd|vbs|wsf)$'
+$SastDownloadExecRegex = '(?i)\b(?:I' + 'EX|Invoke-' + 'Expression)\b[^\r\n]{0,200}\bDownload(?:String|Data)\b|\bDownload' + 'String\s*\([^\r\n]{0,200}\|\s*(?:I' + 'EX|Invoke-' + 'Expression)\b'
+$SastScriptblockRegex = '(?i)\[script' + 'block\]::Create\s*\([^\r\n]{0,200}(?:\bi' + 'wr\b|\bi' + 'rm\b|Invoke-WebRequest|Invoke-RestMethod|Download' + 'String|\bcurl\b|\bwget\b)'
+$SastPyExecRegex = '(?i)\b(?:ex' + 'ec|ev' + 'al)\s*\([^\r\n]{0,200}(?:url' + 'open|requests\.get|urllib)'
+$SastEncodedCmdRegex = '(?i)\b(?:powershell|pwsh)(?:\.exe)?\b[^\r\n]{0,80}\s-(?:Encoded' + 'Command|enc|ec|e)\s+[A-Za-z0-9+/=]{16,}'
 $SastIexRegex = '(?i)\b(?:Invoke-' + 'Expression|i' + 'ex)\s*\(?\s*(?:Invoke-' + 'RestMethod|Invoke-' + 'WebRequest|i' + 'rm|i' + 'wr|curl|wget)\b'
 $SastCurlPipeRegex = '(?i)\b(?:curl|wget)\b[^\r\n|]{1,240}\|\s*(?:ba)?sh\b'
 $SastEvalAtobRegex = '(?i)\bev' + 'al\s*\(\s*(?:at' + 'ob|Buffer\.from)\s*\('
@@ -150,12 +163,12 @@ function Invoke-DlpCheckOnText {
         # are always checked: only canary_test_ local parts and reserved test domains are allowed.
         $isCanaryLine = $line -imatch 'CANARY_TEST_'
         if ($line -cmatch $SecretShapeRegex) { throw 'secret-pattern' }
-        foreach ($pathRegex in @($PrivateWinCursorRegex, $PrivateWinUsersRegex, $PrivateUnixUsersRegex, $PrivateInternalDirRegex)) {
+        foreach ($pathRegex in @($PrivateWinCursorRegex, $PrivateWinUsersRegex, $PrivateUnixUsersRegex, $PrivateInternalDirRegex, $PrivateWinPersonalDirRegex, $PrivateUncShareRegex)) {
             foreach ($m in [regex]::Matches($line, $pathRegex)) {
                 if (!$isCanaryLine -or $m.Value -inotmatch 'CANARY_TEST_') { throw 'dlp-private-path' }
             }
         }
-        if (!$isCanaryLine -and ($line -match $IbanFrRegex -or $line -match $NirFrRegex)) {
+        if (!$isCanaryLine -and ($line -match $IbanFrRegex -or $line -match $NirFrRegex -or $line -match $PhoneFrRegex)) {
             throw 'dlp-pii'
         }
         Assert-SafeEmailsInLine -Line $line -ErrorReason 'dlp-pii'
@@ -165,17 +178,26 @@ function Invoke-DlpCheckOnText {
 function Invoke-SastCheckOnText {
     param([string]$Text, [string]$RelativePath)
 
+    # A byte-order mark is only legitimate as the very first character of a file.
+    if ($Text.Length -gt 0 -and $Text[0] -eq [char]0xFEFF) { $Text = $Text.Substring(1) }
     if ($Text -match $InvisibleUnicodeRegex) {
         throw 'sast-invisible-unicode'
     }
-    if ($RelativePath -imatch '\.(?:md|ps1|psm1|mjs|cjs|js|ts|tsx|jsx|py|sh|bash|zsh|yaml|yml|toml|json)$') {
+    if ($RelativePath -match $SastCodeExtensionRegex -and $Text -match $HomoglyphRegex) {
+        throw 'sast-homoglyph'
+    }
+    if ($RelativePath -imatch '\.(?:md|ps1|psm1|psd1|mjs|cjs|js|ts|tsx|jsx|py|sh|bash|zsh|bat|cmd|vbs|wsf|yaml|yml|toml|json)$') {
         foreach ($line in ($Text -split "\r?\n")) {
             if (!$line -or $line -imatch 'CANARY_TEST_') { continue }
             if ($line -match $SastIexRegex -or
                 $line -match $SastCurlPipeRegex -or
                 $line -match $SastEvalAtobRegex -or
                 $line -match $SastFuncCtorRegex -or
-                $line -match $SastChildExecB64Regex) {
+                $line -match $SastChildExecB64Regex -or
+                $line -match $SastDownloadExecRegex -or
+                $line -match $SastScriptblockRegex -or
+                $line -match $SastPyExecRegex -or
+                $line -match $SastEncodedCmdRegex) {
                 throw 'sast-dangerous-pattern'
             }
         }
@@ -194,6 +216,7 @@ function Inspect-ZipArchiveContent {
         if (!$entry.Name) { continue }
         # Entries of an archive found inside a folder have not been through the layout stage yet.
         Assert-PublicPath $entry.FullName
+        if ($Mode -eq 'dlp') { Assert-SafeEmailsInLine -Line $entry.FullName -ErrorReason 'dlp-pii' }
         if ($entry.Length -le 0) { continue }
         if ($entry.Length -gt $MaxArchiveUncompressedBytes) { throw 'archive-too-large' }
         $ms = [IO.MemoryStream]::new()
@@ -247,8 +270,10 @@ function Invoke-ArtifactContentScan {
         Add-Type -AssemblyName System.IO.Compression
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         foreach ($file in $files) {
-            if ($file.Length -le 0) { continue }
             $relative = $file.FullName.Substring($Item.FullName.Length).TrimStart([char[]]'/\').Replace('\', '/')
+            # A personal address in a file name is published as surely as one in the file content.
+            if ($Mode -eq 'dlp') { Assert-SafeEmailsInLine -Line $relative -ErrorReason 'dlp-pii' }
+            if ($file.Length -le 0) { continue }
             # ZIP containers inside the folder (.zip, .docx, .xlsx, renamed archives) are opened and inspected too.
             if (Test-ZipMagic ([byte[]](Read-FileHead $file.FullName))) {
                 $archive = $null
@@ -439,6 +464,18 @@ try {
         }
         $stage = 'git-secrets'
         Invoke-SecretScan -Mode git -Target $repo -Options @('--log-opts=--all --full-history --no-ext-diff --no-textconv')
+        # Everything ever added to the history and every commit message goes through the DLP rules:
+        # a path or a personal datum removed later is still published with the history.
+        $stage = 'git-dlp'
+        $historyRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'log', '--all', '-p', '-U0', '--no-ext-diff', '--no-textconv', '--no-color', '--format=%B')
+        if ($historyRes.exitCode -ne 0) { throw 'git-history-unavailable' }
+        $added = foreach ($histLine in @($historyRes.output)) {
+            $h = [string]$histLine
+            if (!$h -or $h -match '^(?:diff --git |index |@@ |--- |\+\+\+ |new file mode|deleted file mode|old mode|new mode|similarity index|rename (?:from|to) |copy (?:from|to) |Binary files |\\ No newline)') { continue }
+            if ($h.StartsWith('-')) { continue }
+            if ($h.StartsWith('+')) { $h.Substring(1) } else { $h }
+        }
+        Invoke-DlpCheckOnText -Text (@($added) -join "`n")
         $gitHistory = 'checked'
     }
 
@@ -459,7 +496,7 @@ try {
         'archive-too-large', 'archive-too-deep', 'missing-policy', 'scanner-unavailable',
         'scanner-error', 'invalid-or-shallow-git', 'invalid-git-root',
         'project-scan-exceptions', 'git-files-unavailable', 'git-history-unavailable',
-        'git-personal-email', 'artifact-changed', 'unscannable-archive', 'unscanned-text-file'
+        'git-personal-email', 'artifact-changed', 'unscannable-archive', 'unscanned-text-file', 'sast-homoglyph'
     )
     $msg = [string]$_.Exception.Message
     $reason = if ($knownReasons -contains $msg) { $msg } else { 'check-unavailable-or-invalid-input' }
