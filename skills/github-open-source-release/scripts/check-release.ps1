@@ -17,7 +17,10 @@ $PrivateWinUsersRegex = '(?i)\b[A-Z]:' + '[\\/]+' + 'Users' + '[\\/]+(?!(?:Publi
 $PrivateUnixUsersRegex = '(?:^|[\s"''`(=:])/(?:Users|home)/(?!(?:runner|ubuntu|root|devcontainer|git|node|docker|vscode)(?:/|$))[a-zA-Z0-9._-]+/'
 $PrivateInternalDirRegex = '(?i)(?:^|[\s"''`(=/\\])(?!(?:~|\$HOME|%USERPROFILE%)[\\/]+)\.(?:memento' + '|codex' + '|gemini)(?:[\\/]|$)'
 
-$IbanFrRegex = '\bFR\d{2}(?:[\s-]?\d{4}){5}[\s-]?\d{3}\b'
+# Well-known credential shapes, also checked by the DLP stage so that a key hidden where gitleaks does not
+# look (UTF-16 text, Office documents, renamed archives) still blocks the release.
+$SecretShapeRegex = '\b(?:AK' + 'IA[0-9A-Z]{16}|gh' + '[pousr]_[A-Za-z0-9]{36,}|github_' + 'pat_[A-Za-z0-9_]{22,}|sk_' + 'live_[A-Za-z0-9]{16,}|xox' + '[abposr]-[A-Za-z0-9-]{10,}|AIza' + '[0-9A-Za-z_-]{35})|-----BEGIN [A-Z ]*PRIVATE ' + 'KEY-----'
+$IbanFrRegex ='\bFR\d{2}(?:[\s-]?\d{4}){5}[\s-]?\d{3}\b'
 $NirFrRegex = '\b[12]\s?\d{2}\s?(?:0[1-9]|1[0-2]|2[0-9])\s?(?:\d{2}|2[AB])\s?\d{3}\s?\d{3}(?:\s?\d{2})?\b'
 $EmailExtractRegex = '\b([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b'
 $AllowedEmailDomainRegex = '(?i)^(?:example\.(?:com|org|net|test|edu)|localhost|(?:[a-z0-9-]+\.)*users\.noreply\.github\.com|.*\.(?:test|example|invalid|localhost))$'
@@ -71,8 +74,9 @@ function Assert-PublicPath {
     if ($entry -match '(?i)(^|/)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?(/|$)') {
         throw 'unsafe-entry'
     }
-    if ($entry -match '(?i)(^|/)(\.git|\.memento|\.local|\.gitleaksignore)(/|$)' -or
-        $entry -match '(?i)(^|/)\.env($|\.(?!example$))|\.(sqlite3?|db|pem|pfx|key)(-(wal|shm|journal))?$') {
+    if ($entry -match '(?i)(^|/)(\.git|\.memento|\.local|\.gitleaksignore|\.ssh|\.aws|\.gnupg)(/|$)' -or
+        $entry -match '(?i)(^|/)\.env($|\.(?!example$))|\.(sqlite3?|db|pem|pfx|key|p12|keystore|jks)(-(wal|shm|journal))?$' -or
+        $entry -match '(?i)(^|/)(id_(rsa|ed25519|ecdsa|dsa)|credentials\.json|service-account[^/]*\.json|\.git-credentials|\.netrc|\.pgpass|secrets\.(ya?ml|json|toml))$') {
         throw 'private-entry'
     }
 }
@@ -92,16 +96,31 @@ function Get-PublicFiles {
     }
 }
 
-function Test-InspectableTextBytes {
-    param([byte[]]$Bytes)
+$TextExtensionRegex = '(?i)\.(md|markdown|rst|txt|text|log|json|jsonc|ipynb|js|mjs|cjs|ts|tsx|jsx|py|ps1|psm1|psd1|sh|bash|zsh|bat|cmd|vbs|yaml|yml|toml|ini|cfg|conf|env|csv|tsv|xml|html|htm|css|sql)$'
 
-    if ($null -eq $Bytes -or $Bytes.Length -eq 0) { return $false }
-    if ($Bytes.Length -gt $MaxScannableTextBytes) { return $false }
+function Test-ZipMagic {
+    param([byte[]]$Bytes)
+    return ($Bytes.Length -ge 4 -and $Bytes[0] -eq 0x50 -and $Bytes[1] -eq 0x4B -and $Bytes[2] -eq 3 -and $Bytes[3] -eq 4)
+}
+
+# Returns the text to inspect, or $null for a genuine binary file. A text file is never skipped
+# silently: UTF-16 is decoded, and a NUL byte in a text extension does not hide the rest of it.
+function Get-ScanText {
+    param([byte[]]$Bytes, [string]$Name)
+
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0) { return $null }
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) { return [Text.Encoding]::Unicode.GetString($Bytes, 2, $Bytes.Length - 2) }
+    if ($Bytes.Length -ge 2 -and $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF) { return [Text.Encoding]::BigEndianUnicode.GetString($Bytes, 2, $Bytes.Length - 2) }
     $checkLen = [Math]::Min($Bytes.Length, 4096)
+    $nulOdd = 0; $nulEven = 0
     for ($i = 0; $i -lt $checkLen; $i++) {
-        if ($Bytes[$i] -eq 0) { return $false }
+        if ($Bytes[$i] -eq 0) { if ($i % 2) { $nulOdd++ } else { $nulEven++ } }
     }
-    return $true
+    if (($nulOdd + $nulEven) -eq 0) { return [Text.Encoding]::UTF8.GetString($Bytes) }
+    if ($nulOdd -ge ($checkLen / 2) * 0.4 -and $nulEven -le $nulOdd / 10) { return [Text.Encoding]::Unicode.GetString($Bytes) }
+    if ($nulEven -ge ($checkLen / 2) * 0.4 -and $nulOdd -le $nulEven / 10) { return [Text.Encoding]::BigEndianUnicode.GetString($Bytes) }
+    if ($Name -match $TextExtensionRegex) { return [Text.Encoding]::UTF8.GetString($Bytes).Replace([string][char]0, '') }
+    return $null
 }
 
 function Assert-SafeEmailsInLine {
@@ -125,14 +144,18 @@ function Invoke-DlpCheckOnText {
     param([string]$Text)
 
     foreach ($line in ($Text -split "\r?\n")) {
-        if (!$line -or $line -imatch 'CANARY_TEST_') { continue }
-        if ($line -match $PrivateWinCursorRegex -or
-            $line -match $PrivateWinUsersRegex -or
-            $line -match $PrivateUnixUsersRegex -or
-            $line -match $PrivateInternalDirRegex) {
-            throw 'dlp-private-path'
+        if (!$line) { continue }
+        # A CANARY_TEST_ line only exempts the values that carry the marker themselves (a path such as
+        # C:\Users\CANARY_TEST_user), plus fake IBAN/NIR numbers that cannot carry it. E-mail addresses
+        # are always checked: only canary_test_ local parts and reserved test domains are allowed.
+        $isCanaryLine = $line -imatch 'CANARY_TEST_'
+        if ($line -cmatch $SecretShapeRegex) { throw 'secret-pattern' }
+        foreach ($pathRegex in @($PrivateWinCursorRegex, $PrivateWinUsersRegex, $PrivateUnixUsersRegex, $PrivateInternalDirRegex)) {
+            foreach ($m in [regex]::Matches($line, $pathRegex)) {
+                if (!$isCanaryLine -or $m.Value -inotmatch 'CANARY_TEST_') { throw 'dlp-private-path' }
+            }
         }
-        if ($line -match $IbanFrRegex -or $line -match $NirFrRegex) {
+        if (!$isCanaryLine -and ($line -match $IbanFrRegex -or $line -match $NirFrRegex)) {
             throw 'dlp-pii'
         }
         Assert-SafeEmailsInLine -Line $line -ErrorReason 'dlp-pii'
@@ -169,35 +192,51 @@ function Inspect-ZipArchiveContent {
     if ($Depth -gt $MaxArchiveDepth) { throw 'archive-too-deep' }
     foreach ($entry in $Archive.Entries) {
         if (!$entry.Name) { continue }
-        if ($entry.Name -imatch '\.zip$') {
-            $ms = [IO.MemoryStream]::new()
-            $es = $entry.Open()
-            try { $es.CopyTo($ms) } finally { $es.Dispose() }
+        # Entries of an archive found inside a folder have not been through the layout stage yet.
+        Assert-PublicPath $entry.FullName
+        if ($entry.Length -le 0) { continue }
+        if ($entry.Length -gt $MaxArchiveUncompressedBytes) { throw 'archive-too-large' }
+        $ms = [IO.MemoryStream]::new()
+        $es = $entry.Open()
+        try { $es.CopyTo($ms) } finally { $es.Dispose() }
+        $bytes = $ms.ToArray()
+        # Any ZIP container (.zip, Office and OpenDocument files, renamed archives) is opened by its signature.
+        if (Test-ZipMagic $bytes) {
             $ms.Position = 0
             $nested = $null
             try {
-                $nested = [IO.Compression.ZipArchive]::new($ms, [IO.Compression.ZipArchiveMode]::Read, $false)
+                try {
+                    $nested = [IO.Compression.ZipArchive]::new($ms, [IO.Compression.ZipArchiveMode]::Read, $false)
+                } catch { throw 'unscannable-archive' }
                 Inspect-ZipArchiveContent -Archive $nested -Depth ($Depth + 1) -Mode $Mode
             } finally {
                 if ($nested) { $nested.Dispose() } else { $ms.Dispose() }
             }
             continue
         }
-        if ($entry.Length -le 0 -or $entry.Length -gt $MaxScannableTextBytes) { continue }
-        $msText = [IO.MemoryStream]::new()
-        $esText = $entry.Open()
-        try { $esText.CopyTo($msText) } finally { $esText.Dispose() }
-        $bytes = $msText.ToArray()
-        $msText.Dispose()
-        if (Test-InspectableTextBytes $bytes) {
-            $text = [Text.Encoding]::UTF8.GetString($bytes)
-            if ($Mode -eq 'dlp') {
-                Invoke-DlpCheckOnText -Text $text
-            } elseif ($Mode -eq 'sast') {
-                Invoke-SastCheckOnText -Text $text -RelativePath $entry.FullName
-            }
+        $ms.Dispose()
+        if ($bytes.Length -gt $MaxScannableTextBytes) {
+            if ($entry.Name -match $TextExtensionRegex) { throw 'unscanned-text-file' }
+            continue
+        }
+        $text = Get-ScanText -Bytes $bytes -Name $entry.Name
+        if ($null -eq $text) { continue }
+        if ($Mode -eq 'dlp') {
+            Invoke-DlpCheckOnText -Text $text
+        } elseif ($Mode -eq 'sast') {
+            Invoke-SastCheckOnText -Text $text -RelativePath $entry.FullName
         }
     }
+}
+
+function Read-FileHead {
+    param([string]$Path)
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+        $head = New-Object byte[] 4
+        $n = $fs.Read($head, 0, 4)
+        return $head[0..([Math]::Max(0, $n - 1))]
+    } finally { $fs.Dispose() }
 }
 
 function Invoke-ArtifactContentScan {
@@ -205,17 +244,33 @@ function Invoke-ArtifactContentScan {
 
     if ($Item.PSIsContainer) {
         $files = @(Get-PublicFiles $Item.FullName $Item.FullName | Sort-Object FullName)
+        Add-Type -AssemblyName System.IO.Compression
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
         foreach ($file in $files) {
-            if ($file.Length -le 0 -or $file.Length -gt $MaxScannableTextBytes) { continue }
-            $bytes = [IO.File]::ReadAllBytes($file.FullName)
-            if (Test-InspectableTextBytes $bytes) {
-                $text = [Text.Encoding]::UTF8.GetString($bytes)
-                $relative = $file.FullName.Substring($Item.FullName.Length).TrimStart([char[]]'/\').Replace('\', '/')
-                if ($Mode -eq 'dlp') {
-                    Invoke-DlpCheckOnText -Text $text
-                } elseif ($Mode -eq 'sast') {
-                    Invoke-SastCheckOnText -Text $text -RelativePath $relative
+            if ($file.Length -le 0) { continue }
+            $relative = $file.FullName.Substring($Item.FullName.Length).TrimStart([char[]]'/\').Replace('\', '/')
+            # ZIP containers inside the folder (.zip, .docx, .xlsx, renamed archives) are opened and inspected too.
+            if (Test-ZipMagic ([byte[]](Read-FileHead $file.FullName))) {
+                $archive = $null
+                try {
+                    try { $archive = [IO.Compression.ZipFile]::OpenRead($file.FullName) } catch { throw 'unscannable-archive' }
+                    Inspect-ZipArchiveContent -Archive $archive -Depth 1 -Mode $Mode
+                } finally {
+                    if ($archive) { $archive.Dispose() }
                 }
+                continue
+            }
+            if ($file.Length -gt $MaxScannableTextBytes) {
+                # A text file too large to inspect blocks the check instead of passing in silence.
+                if ($file.Name -match $TextExtensionRegex) { throw 'unscanned-text-file' }
+                continue
+            }
+            $text = Get-ScanText -Bytes ([IO.File]::ReadAllBytes($file.FullName)) -Name $file.Name
+            if ($null -eq $text) { continue }
+            if ($Mode -eq 'dlp') {
+                Invoke-DlpCheckOnText -Text $text
+            } elseif ($Mode -eq 'sast') {
+                Invoke-SastCheckOnText -Text $text -RelativePath $relative
             }
         }
         return
@@ -404,7 +459,7 @@ try {
         'archive-too-large', 'archive-too-deep', 'missing-policy', 'scanner-unavailable',
         'scanner-error', 'invalid-or-shallow-git', 'invalid-git-root',
         'project-scan-exceptions', 'git-files-unavailable', 'git-history-unavailable',
-        'git-personal-email', 'artifact-changed'
+        'git-personal-email', 'artifact-changed', 'unscannable-archive', 'unscanned-text-file'
     )
     $msg = [string]$_.Exception.Message
     $reason = if ($knownReasons -contains $msg) { $msg } else { 'check-unavailable-or-invalid-input' }
