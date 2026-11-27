@@ -77,8 +77,10 @@ sequenceDiagram
     Engine->>Disk: Valide en_revue -> termine + re-génère KANBAN.md
 
     opt Si KANBAN.md a été modifié à la main (Obsidian)
-        Engine-->>Agent: render bloqué (empreinte SHA-256 divergente)
-        Agent->>Engine: sync-md
+        Engine-->>Agent: Garde SHA-256 vérifiée AVANT écriture : rien n'est enregistré
+        Engine-->>Web: 409 + état réel du disque (l'écran se resynchronise)
+        Humain->>Web: Bouton « Récupérer mes modifications » (op sync-md)
+        Agent->>Engine: ou sync-md en CLI, puis relance l'action
         Engine->>Disk: Rapatrie les déplacements vers tasks/*.md puis re-rend
     end
 ```
@@ -110,3 +112,12 @@ stateDiagram-v2
     termine --> archive : archive (--done-older-than N / --all-done / --id)
     archive --> [*]
 ```
+
+---
+
+## 4. Retours d'Erreur & Ordres Rapides (écran `serve`)
+
+- **Garde `KANBAN.md` avant écriture** : en cas de retouche manuelle, aucune commande d'écriture (CLI, `batch`, API, envoi de pièce jointe) n'écrit sur disque ; le message commence par « Aucune modification n'a été enregistrée » et donne `sync-md`. La porte Agent/Humain reste évaluée en premier. Si `KANBAN.md` change entre l'écriture et le rendu, le message dit ce qui a été enregistré et propose `sync-md` ou `render --force-md`.
+- **Écran toujours aligné sur le disque** : toute réponse d'erreur de `/api/action` et `/api/upload` (400/409, jamais 403) renvoie `state` ; à défaut, l'écran relit `GET /api/state`.
+- **Bandeau d'erreur persistant** (`role="alert"`, fermable, construit sans `innerHTML`) avec action contextuelle : 409 → « Récupérer mes modifications » (`sync-md`) ; 403 → « La session du tableau a expiré. Rechargez la page. » + « Recharger la page » ; réseau ou réponse illisible → « Réessayer ». Le toast court est réservé aux succès ; un échec de copie presse-papiers est signalé.
+- **Ordres rapides** calculés selon le statut réel (`build_quick_orders`) : jamais d'ordre de validation pour l'assistant ; une carte en revue propose « Prépare T-xxx pour ma validation humaine (récapitulatif de revue) » ; aucune proposition sur une carte terminée ou archivée.
