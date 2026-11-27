@@ -1,7 +1,7 @@
 {
   "name": "toolbox",
   "displayName": "Toolbox",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Catalogue open source de 5 skills développeur : publication GitHub sécurisée, tests hostiles QA, audit de tests, standard de skills et Kanban Markdown local.",
   "author": {
     "name": "Melkyzedec",

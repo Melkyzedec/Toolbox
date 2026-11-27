@@ -10,7 +10,7 @@ Catalogue open source de **skills** et d'outils réutilisables pour assistants d
 | **`qa-hostile-tests`** | [`skills/qa-hostile-tests/`](./skills/qa-hostile-tests/) | Conçoit et exécute une batterie de tests hostiles boîte noire à `0 USD` (Pré-Dev TDD `Red -> Green` ou Mission 0 de reprise `Brownfield Gate`, cohérence d'état, sabotage d'entrées, pièges Windows, canaris DLP `CANARY_TEST_` et scan SAST). |
 | **`test-benchmark-audit`** | [`skills/test-benchmark-audit/`](./skills/test-benchmark-audit/) | Audite de manière hostile les suites de tests, oracles, garde-fous sécurité/RGPD/DLP/SAST et benchmarks A/B LLM (Mode 1 Audit & `Brownfield Gate`, Mode 2 Correction par tranches TDD `Red -> Green`, Mode 3 Réception globale et porte `check-release.ps1`). |
 | **`mon-standard-skill`** | [`skills/mon-standard-skill/`](./skills/mon-standard-skill/) | Standard d'architecture, de sécurité (`Skill-Scanner`, DLP, `Safety-Net`), de cycle de vie en 3 zones et de synchronisation multi-outils Windows (`UTF-8` sans BOM, SHA-256 vérifiés et archives `.zip` POSIX pour Claude Desktop). |
-| **`kanban-tasks`** | [`skills/kanban-tasks/`](./skills/kanban-tasks/) | Gère un tableau Kanban Markdown local (1 fichier `.md` par carte, compatible Obsidian `KANBAN.md`), vues interactives Kanban/Horizons/Frise, dépendances, pièces jointes, réglages de libellés et serveur web local `127.0.0.1` (`serve --open`) sans dépendance externe (Python 3 stdlib, 25 tests automatisés). |
+| **`kanban-tasks`** | [`skills/kanban-tasks/`](./skills/kanban-tasks/) | Gère un tableau Kanban Markdown local (1 fichier `.md` par carte, compatible Obsidian `KANBAN.md`), vues interactives Kanban/Horizons/Frise, dépendances, pièces jointes, réglages de libellés et serveur web local `127.0.0.1` (`serve --open`) sans dépendance externe (Python 3 stdlib, 30 tests automatisés). |
 
 ---
 
@@ -77,7 +77,7 @@ Règles strictes : n'exécute aucun script téléchargé à la volée, n'écris 
 
 ### Claude Desktop (Import `.zip`)
 
-1. Téléchargez les archives individuelles `<nom-skill>-claude-desktop.zip` et `SHA256SUMS.txt` depuis la section **[Releases](https://github.com/Melkyzedec/Toolbox/releases)** du dépôt (ou générez-les localement avec `python -B ./scripts/package-skills.py --out ./dist/v1.0.0`).
+1. Téléchargez les archives individuelles `<nom-skill>-claude-desktop.zip` et `SHA256SUMS.txt` depuis la section **[Releases](https://github.com/Melkyzedec/Toolbox/releases)** du dépôt (ou générez-les localement avec `python -B ./scripts/package-skills.py --out ./dist/v1.1.0`).
 2. Vérifiez l'empreinte SHA-256 avant import (`Get-FileHash <archive>.zip -Algorithm SHA256` sous PowerShell ou `sha256sum -c SHA256SUMS.txt`).
 3. Dans **Claude Desktop**, activez *Code execution and file creation* (**Settings > Capabilities**), ouvrez **Customize > Skills > Add skill > Upload a skill** et importez chaque archive `.zip`.
 
