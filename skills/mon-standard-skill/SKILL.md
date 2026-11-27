@@ -27,8 +27,9 @@ Ce standard complète les guides natifs de création de skills d'Antigravity et 
    - **Zéro chemin machine personnel :** n'écris jamais de chemin local privé en dur (profil utilisateur Windows/Unix spécifique ou chemin disque personnel) dans `SKILL.md`, `references/` ou `scripts/`. Utilise exclusivement des variables ou placeholders génériques (`%USERPROFILE%`, `$HOME`, `<projets-root>`, `<dossier-skill>`).
    - **Convention canari :** tout exemple ou test illustrant une donnée sensible (email, IBAN, clé, chemin bloqué) doit utiliser le marqueur `CANARY_TEST_` dans la valeur elle-même ou un domaine réservé (`@example.test`). Un IBAN, un NIR ou un numéro de téléphone ne pouvant pas porter le marqueur, construis-le à l'exécution (concaténation) au lieu de le stocker en clair.
    - **Zéro Unicode invisible / SAST :** aucun caractère Bidi ou invisible (*Trojan Source*) ni téléchargement exécuté à la volée dans les fichiers de la skill.
+   - **Hygiène des tests face aux scanners :** BOM et invisibles toujours échappés (`chr(0xFEFF)`, `"\u200b"`), noms de fixtures neutres (jamais `secret`/`key`/`passwd` écrits sur disque), `HTMLParser` plutôt qu'une regex `<script>`.
 6. **Cartographie des processus obligatoire (`references/processus.md`) :**
-   - Toute skill terminée doit embarquer un fichier `<dossier-skill>/references/processus.md` (`UTF-8` sans BOM, diagrammes `mermaid` *Déclenchement → Étapes & garde-fous → Sorties & contrôles*, sans chemin privé ni secret) référencé depuis `SKILL.md`.
+   - Toute skill terminée doit embarquer un fichier `<dossier-skill>/references/processus.md` (`UTF-8` sans BOM, diagrammes `mermaid` *Déclenchement → Étapes & garde-fous → Sorties & contrôles*, sans HTML, labels contenant des caractères spéciaux entre guillemets, sans chemin privé ni secret) référencé depuis `SKILL.md`.
    - **Lieu canonique unique :** ne laisse jamais une cartographie durable uniquement dans les artefacts temporaires de conversation d'un assistant. Le dossier canonique de la skill fait foi (`<dossier-skill>/references/processus.md`), ou pour un projet hors skill son dossier `docs/processus.md` / `board/processus.md`.
    - **Mise à jour obligatoire à chaque modification (tous modèles) :** dès qu'une skill existante est modifiée (ajout ou changement d'étape, de mode, de commande, de garde-fou ou de sortie), régénère ou mets à jour immédiatement `references/processus.md` avant validation et synchronisation afin d'éviter toute dérive avec `SKILL.md`.
 
@@ -45,7 +46,8 @@ Ce standard complète les guides natifs de création de skills d'Antigravity et 
 4. **Séparation stricte Codex vs Claude Desktop :**
    - Crée `agents/openai.yaml` (`interface.display_name`, `short_description` de `25–64` caractères, `default_prompt` citant `$<nom>`) **uniquement** dans la copie Codex (`skills/<nom>/agents/openai.yaml`).
    - **N'inclus jamais** `agents/openai.yaml` dans les copies Antigravity, Claude Code, `Toolbox/skills/` ni dans une archive Claude Desktop (risque de rejet d'import).
-5. **Archive Claude Desktop (si export ou multi-outils demandé) :**
+5. **Fusion open source :** une branche issue d'un agent cloud se fusionne en **Squash & merge** sous l'identité `noreply` du mainteneur, sans trailer `Co-authored-by` tiers.
+6. **Archive Claude Desktop (si export ou multi-outils demandé) :**
    - Génère l'archive `<nom>-claude-desktop.zip` via Python (`zipfile`) avec chemins **POSIX `/`**, contenant un **unique dossier racine `<nom>/`** (`SKILL.md` + `references/` / `scripts/` éventuels, sans `agents/`).
 
 ## 3. Validation déterministe obligatoire & Restitution non-dev

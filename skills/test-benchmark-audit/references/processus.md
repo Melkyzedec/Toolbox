@@ -29,7 +29,7 @@ flowchart TB
 
     subgraph M3["Mode 3 — Reception & Contre-Verification Globale (0 USD)"]
         V1["1. Revue croisee code reel vs .md (0 skip, 0 mock menteur)"]
-        V2["2. Contre-test mutation (verifie echec si regression)"]
+        V2["2. Contre-test mutation (mutation-check.ps1)\nScore minimal 80 % · survivant Critique/Haute = bloquant"]
         V3["3. Re-test global de 100 % des suites + check-release.ps1\n(-Fast ou complet -GitRoot -> status: passed)"]
         V4["4. Proces-verbal ## 6. Cloture dans le .md\nVerdict : Valide ou Bloquants restants"]
         V1 --> V2 --> V3 --> V4

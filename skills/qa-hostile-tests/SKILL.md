@@ -66,6 +66,22 @@ Termine toujours par ce bilan structuré, directement exploitable même par un n
 
 ---
 
-## 3. Références
+## 3. Checklist Windows (6 points, issus de bugs réels)
+1. **Fixtures binaires/LF :** écris-les avec `write_bytes` (jamais `write_text`, qui convertit `\n` en `\r\n` sous Windows).
+2. **Chemins absolus portables :** construis-les via `os.path.abspath(...)` ; depuis Python 3.13 sous Windows, `os.path.isabs("\\x")` renvoie `False`.
+3. **Un sous-dossier temporaire par nom de fichier testé :** NTFS ignore la casse (`NUL` et `nul` entrent en collision).
+4. **Handles fermés sur erreur :** ouvre avec `with open(..., "rb")` avant de passer le flux à un parseur tiers (sinon `WinError 32` au nettoyage).
+5. **BOM UTF-8 :** teste la lecture JSON/CSV avec BOM (`utf-8-sig`, produit par Windows PowerShell 5.1) et vérifie que l'écriture reste sans BOM.
+6. **Vrai passage Windows avant fusion :** tout code produit sous Linux/Cloud passe une exécution réelle Windows + PowerShell (jonctions NTFS comprises).
+
+### Hygiène tests & scanners (`check-release`, Gitleaks, CodeQL)
+- Jamais de BOM ni d'Unicode invisible littéral dans un test : génère-les (`chr(0xFEFF)`, `"\u200b"`).
+- Jamais de variable ou fixture écrite sur disque nommée `secret`, `key` ou `passwd` : préfère des noms neutres (`canary_value`, `sample_token`).
+- Pour inspecter du HTML, utilise `html.parser.HTMLParser` plutôt qu'une regex sur `<script>` (signalée par CodeQL).
+- Données fictives uniquement : `CANARY_TEST_` / `@example.test`.
+
+---
+
+## 4. Références
 - Matrice des attaques hostiles : `references/matrice-tests-hostiles.md`.
 - Cartographie des processus : `references/processus.md`.
