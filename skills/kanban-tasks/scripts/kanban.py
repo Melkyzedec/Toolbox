@@ -126,6 +126,14 @@ class KanbanError(Exception):
     """Erreur métier ou de validation du tableau Kanban."""
 
 
+class KanbanDriftError(KanbanError):
+    """KANBAN.md a été retouché à la main depuis le dernier rendu (réponse HTTP 409)."""
+
+    def __init__(self, message: str, saved: bool = False) -> None:
+        super().__init__(message)
+        self.saved = saved
+
+
 def configure_stdio() -> None:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -890,16 +898,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   --border: #d7dee8;
   --text: #16202a;
   --muted: #5b6878;
-  --accent: #2563eb;
+  --accent: #1d4ed8;
   --accent-soft: #dbeafe;
-  --danger: #dc2626;
+  --danger: #b91c1c;
   --danger-soft: #fee2e2;
-  --warn: #d97706;
+  --warn: #92400e;
   --warn-soft: #fef3c7;
-  --ok: #059669;
+  --ok: #047857;
   --ok-soft: #d1fae5;
   --purple: #7c3aed;
   --purple-soft: #ede9fe;
+  --on-accent: #ffffff;
+  --on-ok: #ffffff;
+  --on-danger: #ffffff;
+  --alert-bg: #fee2e2;
+  --alert-text: #7f1d1d;
   --shadow: 0 2px 8px rgba(15, 23, 42, 0.07);
 }
 [data-theme="dark"] {
@@ -909,16 +922,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   --border: #334155;
   --text: #f1f5f9;
   --muted: #94a3b8;
-  --accent: #60a5fa;
+  --accent: #93c5fd;
   --accent-soft: rgba(59, 130, 246, 0.2);
-  --danger: #f87171;
+  --danger: #fca5a5;
   --danger-soft: rgba(239, 68, 68, 0.2);
   --warn: #fbbf24;
   --warn-soft: rgba(245, 158, 11, 0.2);
   --ok: #34d399;
   --ok-soft: rgba(16, 185, 129, 0.2);
-  --purple: #a78bfa;
+  --purple: #c4b5fd;
   --purple-soft: rgba(139, 92, 246, 0.2);
+  --on-accent: #0f172a;
+  --on-ok: #0f172a;
+  --on-danger: #0f172a;
+  --alert-bg: #450a0a;
+  --alert-text: #fecaca;
   --shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
 }
 * { box-sizing: border-box; }
@@ -954,7 +972,7 @@ button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.active {
   background: var(--accent);
-  color: #ffffff;
+  color: var(--on-accent);
   border-color: var(--accent);
 }
 .filters {
@@ -968,7 +986,7 @@ button.active {
 }
 .filters input[type="search"] { min-width: 210px; flex: 1 1 210px; max-width: 320px; }
 .chip-btn { font-size: 0.82rem; padding: 4px 9px; border-radius: 999px; background: var(--surface-alt); }
-.chip-btn.active { background: var(--accent); color: #ffffff; }
+.chip-btn.active { background: var(--accent); color: var(--on-accent); }
 .stats-panel {
   margin: 14px 20px 0;
   padding: 14px;
@@ -1060,7 +1078,7 @@ main { padding: 16px 20px 28px; }
 }
 .badges { display: flex; flex-wrap: wrap; gap: 4px; }
 .badge {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   padding: 2px 6px;
   border-radius: 6px;
   background: var(--surface-alt);
@@ -1072,7 +1090,7 @@ main { padding: 16px 20px 28px; }
 .badge.purple { background: var(--purple-soft); color: var(--purple); }
 .badge.accent { background: var(--accent-soft); color: var(--accent); }
 .copy-mini {
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   padding: 2px 6px;
   border-radius: 6px;
   background: var(--surface-alt);
@@ -1101,16 +1119,16 @@ main { padding: 16px 20px 28px; }
   height: 18px;
   border-radius: 5px;
   background: var(--accent);
-  color: #ffffff;
-  font-size: 0.72rem;
+  color: var(--on-accent);
+  font-size: 0.75rem;
   padding: 0 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.tl-bar.overdue { background: var(--danger); }
-.tl-bar.done { background: var(--ok); }
+.tl-bar.overdue { background: var(--danger); color: var(--on-danger); }
+.tl-bar.done { background: var(--ok); color: var(--on-ok); }
 .tl-today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: 0.7; }
 .week-strip { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .modal-backdrop {
@@ -1168,6 +1186,22 @@ main { padding: 16px 20px 28px; }
   z-index: 120;
 }
 .toast.hidden { display: none; }
+.error-banner {
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--danger);
+  background: var(--alert-bg);
+  color: var(--alert-text);
+  font-size: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+.error-banner-msg { flex: 1 1 320px; font-weight: 600; overflow-wrap: anywhere; }
+.error-banner-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .empty-msg { color: var(--muted); font-size: 0.86rem; padding: 8px 2px; }
 .hidden { display: none !important; }
 .mode-badge {
@@ -1186,7 +1220,7 @@ main { padding: 16px 20px 28px; }
 }
 .btn-primary {
   background: var(--accent);
-  color: #ffffff;
+  color: var(--on-accent);
   border-color: var(--accent);
   font-weight: 600;
 }
@@ -1242,7 +1276,7 @@ main { padding: 16px 20px 28px; }
 .dep-btn {
   min-height: 24px;
   padding: 2px 7px;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--surface-alt);
@@ -1262,7 +1296,7 @@ main { padding: 16px 20px 28px; }
 .dep-link { cursor: pointer; text-decoration: underline; color: var(--accent); background: none; border: none; padding: 0; font: inherit; text-align: left; }
 .modal-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .modal-tab { font-size: 0.84rem; padding: 5px 10px; border-radius: 8px; background: var(--surface-alt); }
-.modal-tab.active { background: var(--accent); color: #ffffff; border-color: var(--accent); }
+.modal-tab.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .tab-panel.hidden { display: none; }
 .dep-picker-list {
   max-height: 170px;
@@ -1289,7 +1323,7 @@ main { padding: 16px 20px 28px; }
 .md-box p { margin: 4px 0; }
 .md-box ul { margin: 4px 0; padding-left: 18px; }
 .md-box pre { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 8px; overflow-x: auto; font-size: 0.82rem; }
-.md-box code { background: var(--surface); padding: 1px 4px; border-radius: 4px; font-size: 0.84em; }
+.md-box code { background: var(--surface); padding: 1px 4px; border-radius: 4px; font-size: 0.86em; }
 .att-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .att-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; background: var(--surface-alt); border-radius: 6px; font-size: 0.84rem; }
 .att-row a { color: var(--accent); word-break: break-all; }
@@ -1317,6 +1351,7 @@ main { padding: 16px 20px 28px; }
     <button type="button" id="toggle-theme">Thème</button>
   </div>
 </header>
+<div id="error-banner" class="error-banner hidden" role="alert" aria-live="assertive"></div>
 
 <section class="filters">
   <input type="search" id="f-search" placeholder="Rechercher ID, titre, tag, note...">
@@ -1739,9 +1774,10 @@ main { padding: 16px 20px 28px; }
 
   function runApiAction(payload, onSuccess, onError) {
     if (!DATA.interactive) {
-      showToast("Mode lecture seule : lancez 'kanban.py serve' pour éditer ici.");
+      showErrorBanner("Mode lecture seule : lancez 'kanban.py serve' pour modifier le tableau ici.", []);
       return;
     }
+    var retry = function () { runApiAction(payload, onSuccess, onError); };
     fetch("/api/action", {
       method: "POST",
       headers: {
@@ -1749,15 +1785,13 @@ main { padding: 16px 20px 28px; }
         "X-Kanban-Token": DATA.csrf_token || ""
       },
       body: JSON.stringify(payload)
-    }).then(function (res) {
-      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
-    }).then(function (resp) {
-      if (!resp.ok || !resp.body.ok) {
-        var errMsg = resp.body.error || "action refusée";
-        showToast("Erreur : " + errMsg);
-        if (onError) onError(errMsg);
+    }).then(readApiResponse, networkFailure).then(function (resp) {
+      if (!resp.ok || !resp.body || !resp.body.ok) {
+        handleApiError(resp.status, resp.body, retry);
+        if (onError) onError((resp.body && resp.body.error) || "action refusée");
         return;
       }
+      hideErrorBanner();
       DATA = resp.body.state;
       populateSelects();
       renderMain();
@@ -1766,20 +1800,114 @@ main { padding: 16px 20px 28px; }
       }
       if (onSuccess) onSuccess(resp.body.result);
     }).catch(function () {
-      showToast("Serveur local inaccessible.");
+      // Exception d'affichage : l'action a pu être enregistrée, on relit le disque sans la rejouer.
+      refreshFromServer(true);
     });
   }
 
-  function refreshFromServer() {
+  function readApiResponse(res) {
+    return res.json().then(function (body) {
+      return { status: res.status, ok: res.ok, body: body };
+    }, function () {
+      return { status: res.status, ok: false, body: { ok: false, unreadable: true } };
+    });
+  }
+
+  function networkFailure() {
+    return { status: 0, ok: false, body: null };
+  }
+
+  function handleApiError(status, body, retry) {
+    body = body || {};
+    // L'écran reflète toujours le disque : état renvoyé par le serveur, sinon relecture.
+    if (body.state) {
+      DATA = body.state;
+      populateSelects();
+      renderMain();
+    } else if (status && status !== 403) {
+      refreshFromServer(true);
+    }
+    if (status === 409 || body.code === "kanban_md_drift") {
+      var driftMsg = body.saved
+        ? "Votre action est enregistrée, mais le fichier KANBAN.md a été modifié en dehors du tableau (par exemple dans Obsidian). « Récupérer mes modifications » réapplique les colonnes lues dans KANBAN.md."
+        : "Rien n'a été enregistré : le fichier KANBAN.md a été modifié en dehors du tableau (par exemple dans Obsidian). Récupérez ces modifications pour remettre le tableau à jour, puis refaites votre action.";
+      showErrorBanner(driftMsg, [{
+        label: "Récupérer mes modifications",
+        run: function () {
+          runApiAction({ op: "sync-md" }, function (res) {
+            showToast("Modifications récupérées (" + (res && res.count ? res.count : 0) + " carte(s) mise(s) à jour)");
+          });
+        }
+      }]);
+      return;
+    }
+    if (status === 403) {
+      showErrorBanner("La session du tableau a expiré. Rechargez la page.", [{
+        label: "Recharger la page",
+        run: function () { window.location.reload(); }
+      }]);
+      return;
+    }
+    if (!status || body.unreadable) {
+      showErrorBanner(
+        "Le tableau ne répond pas correctement : le serveur local est peut-être arrêté. Vérifiez que la fenêtre 'kanban.py serve' est toujours ouverte.",
+        retry ? [{ label: "Réessayer", run: retry }] : []
+      );
+      return;
+    }
+    showErrorBanner(body.error || "Action refusée.", []);
+  }
+
+  function refreshFromServer(silent) {
     if (!DATA.interactive) return;
-    fetch("/api/state").then(function (res) { return res.json(); }).then(function (fresh) {
+    var quiet = silent === true;
+    fetch("/api/state").then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }).then(function (fresh) {
       DATA = fresh;
       populateSelects();
       renderMain();
-      showToast("Tableau actualisé");
+      if (!quiet) {
+        hideErrorBanner();
+        showToast("Tableau actualisé");
+      }
     }).catch(function () {
-      showToast("Impossible de joindre le serveur local.");
+      showErrorBanner(
+        "Impossible de relire le tableau : le serveur local ne répond pas ou a renvoyé une réponse illisible. Vérifiez que la fenêtre 'kanban.py serve' est toujours ouverte.",
+        [{ label: "Réessayer", run: function () { refreshFromServer(false); } }]
+      );
     });
+  }
+
+  function hideErrorBanner() {
+    var banner = document.getElementById("error-banner");
+    if (!banner) return;
+    banner.replaceChildren();
+    banner.classList.add("hidden");
+  }
+
+  function showErrorBanner(msg, actions) {
+    var banner = document.getElementById("error-banner");
+    banner.replaceChildren();
+    banner.appendChild(el("span", "error-banner-msg", msg));
+    var bar = el("div", "error-banner-actions");
+    (actions || []).forEach(function (action) {
+      var btn = el("button", "btn-primary", action.label);
+      btn.type = "button";
+      btn.addEventListener("click", function () {
+        hideErrorBanner();
+        action.run();
+      });
+      bar.appendChild(btn);
+    });
+    var closeBtn = el("button", "", "Fermer");
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Fermer le message d'erreur");
+    closeBtn.addEventListener("click", hideErrorBanner);
+    bar.appendChild(closeBtn);
+    banner.appendChild(bar);
+    banner.classList.remove("hidden");
   }
 
   function el(tag, className, text) {
@@ -1813,8 +1941,14 @@ main { padding: 16px 20px 28px; }
     ta.style.opacity = "0";
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand("copy"); showToast("Copié : " + text); } catch (e) {}
+    var copied = false;
+    try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
     document.body.removeChild(ta);
+    if (copied) {
+      showToast("Copié : " + text);
+    } else {
+      showErrorBanner("Copie impossible dans le presse-papiers. Sélectionnez ce texte et copiez-le avec Ctrl+C : " + text, []);
+    }
   }
 
   function initTheme() {
@@ -1898,14 +2032,17 @@ main { padding: 16px 20px 28px; }
     var card = el("article", cls);
     var top = el("div", "card-top");
     top.appendChild(el("span", "card-id", t.id));
-    var copyBtn = el("button", "copy-mini", "Copier ordre");
-    copyBtn.type = "button";
-    copyBtn.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      var cmd = t.role === "review" ? ("Valide " + t.id + " en terminé") : ("Passe " + t.id + " en cours");
-      copyOrder(cmd);
-    });
-    top.appendChild(copyBtn);
+    var quickOrders = t.quick_orders || [];
+    if (quickOrders.length) {
+      var copyBtn = el("button", "copy-mini", "Copier ordre");
+      copyBtn.type = "button";
+      copyBtn.setAttribute("title", quickOrders[0]);
+      copyBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        copyOrder(quickOrders[0]);
+      });
+      top.appendChild(copyBtn);
+    }
     card.appendChild(top);
     var cardTitle = el("div", "card-title", t.title);
     cardTitle.setAttribute("title", t.title);
@@ -2481,12 +2618,10 @@ main { padding: 16px 20px 28px; }
 
     var orders = document.getElementById("m-orders");
     orders.replaceChildren();
-    var suggested = [
-      "Passe " + t.id + " en cours",
-      "Passe " + t.id + " en revue",
-      "Valide " + t.id + " en terminé",
-      t.blocked ? ("Débloque " + t.id) : ("Bloque " + t.id + " : préciser le motif")
-    ];
+    var suggested = t.quick_orders || [];
+    if (!suggested.length) {
+      orders.appendChild(el("span", "empty-msg", "Aucun ordre à proposer : la validation finale reste humaine et cette carte est terminée ou archivée."));
+    }
     suggested.forEach(function (cmd) {
       var btn = el("button", "", cmd);
       btn.type = "button";
@@ -2651,7 +2786,7 @@ main { padding: 16px 20px 28px; }
 
   document.getElementById("btn-new-card").addEventListener("click", openCreateModal);
   document.getElementById("btn-settings").addEventListener("click", openSettingsModal);
-  document.getElementById("btn-refresh").addEventListener("click", refreshFromServer);
+  document.getElementById("btn-refresh").addEventListener("click", function () { refreshFromServer(false); });
 
   document.querySelectorAll("#e-tabs .modal-tab").forEach(function (btn) {
     btn.addEventListener("click", function () { switchFormTabs("e-tabs", btn.getAttribute("data-tab")); });
@@ -2734,12 +2869,12 @@ main { padding: 16px 20px 28px; }
     var tid = activeModalId;
     var inp = document.getElementById("e-upload-file");
     if (!inp.files || !inp.files[0]) {
-      showToast("Choisissez d'abord un fichier.");
+      showErrorBanner("Choisissez d'abord un fichier.", []);
       return;
     }
     var file = inp.files[0];
     if (file.size > 5 * 1024 * 1024) {
-      showToast("Fichier trop volumineux (max 5 Mo).");
+      showErrorBanner("Fichier trop volumineux (5 Mo au maximum).", []);
       return;
     }
     var reader = new FileReader();
@@ -2754,13 +2889,12 @@ main { padding: 16px 20px 28px; }
           "X-Kanban-Token": DATA.csrf_token || ""
         },
         body: JSON.stringify({ id: tid, filename: file.name, content_base64: b64 })
-      }).then(function (r) {
-        return r.json().then(function (b) { return { ok: r.ok, body: b }; });
-      }).then(function (resp) {
-        if (!resp.ok || !resp.body.ok) {
-          showToast("Erreur : " + (resp.body.error || "upload refusé"));
+      }).then(readApiResponse, networkFailure).then(function (resp) {
+        if (!resp.ok || !resp.body || !resp.body.ok) {
+          handleApiError(resp.status, resp.body, function () { document.getElementById("e-upload-btn").click(); });
           return;
         }
+        hideErrorBanner();
         DATA = resp.body.state;
         populateSelects();
         renderMain();
@@ -2773,7 +2907,7 @@ main { padding: 16px 20px 28px; }
         }
         showToast("Fichier joint");
       }).catch(function () {
-        showToast("Échec de l'envoi du fichier.");
+        refreshFromServer(true);
       });
     };
     reader.readAsDataURL(file);
@@ -3022,6 +3156,41 @@ main { padding: 16px 20px 28px; }
 """
 
 
+def build_quick_orders(cfg: dict, task: dict) -> list[str]:
+    """Ordres à copier pour l'assistant, filtrés selon l'état réel de la carte.
+
+    Règle Agent/Humain : aucun ordre ne demande à l'assistant de valider (colonne « done ») ;
+    une carte en revue propose de préparer la validation humaine.
+    """
+    if task.get("archived") or task.get("role") == "done":
+        return []
+    tid = str(task.get("id", ""))
+    status = str(task.get("status", ""))
+    role = str(task.get("role", "todo"))
+
+    def first_col(wanted: str) -> dict | None:
+        return next((c for c in cfg["columns"] if c.get("role") == wanted and c["id"] != status), None)
+
+    def passe(col: dict | None) -> list[str]:
+        return [f"Passe {tid} dans la colonne « {col['label']} »"] if col else []
+
+    orders: list[str] = []
+    if task.get("blocked"):
+        orders.append(f"Débloque {tid}")
+    if role in ("backlog", "todo"):
+        orders += passe(first_col("in_progress"))
+    elif role == "in_progress":
+        orders += passe(first_col("review"))
+    elif role == "review":
+        orders.append(f"Prépare {tid} pour ma validation humaine (récapitulatif de revue)")
+        col = first_col("in_progress")
+        if col:
+            orders.append(f"Repasse {tid} dans la colonne « {col['label']} » pour corrections")
+    if not task.get("blocked"):
+        orders.append(f"Bloque {tid} : préciser le motif")
+    return orders
+
+
 def build_html_payload(
     cfg: dict,
     enriched: list[dict],
@@ -3067,6 +3236,7 @@ def build_html_payload(
             "archived": t["archived"],
             "body": t["body"],
             "history": t["meta"].get("history", []),
+            "quick_orders": build_quick_orders(cfg, t),
         })
     all_cats = set(str(c).strip() for c in (cfg.get("categories") or []) if str(c).strip())
     all_tags = set(str(tg).strip() for tg in (cfg.get("tags") or []) if str(tg).strip())
@@ -3122,6 +3292,82 @@ def render_kanban_html(
     )
 
 
+DRIFT_RESYNC_HINT = (
+    "Pour resynchroniser : 'python kanban.py sync-md' rapatrie vos retouches de KANBAN.md "
+    "(ou 'python kanban.py render --force-md' écrase KANBAN.md avec l'état des cartes)."
+)
+
+
+def _pre_validate_gate(board_dir: Path, cfg: dict, op: str, params: dict) -> None:
+    """Rejoue la porte Agent/Humain AVANT toute garde de cohérence : la sécurité reste prioritaire."""
+    if op == "add":
+        assert_transition_allowed(
+            cfg,
+            str(params.get("actor", "humain") or "humain"),
+            "",
+            str(params.get("status", "idees") or "idees").strip(),
+            as_agent=bool(params.get("as_agent", False)),
+        )
+    elif op in ("move", "save_card"):
+        active, _ = load_all_records(board_dir)
+        rec = find_task_record(active, str(params.get("id", "")))
+        current = str(rec["meta"].get("status", ""))
+        target = str(params.get("status") or current).strip()
+        assert_transition_allowed(
+            cfg,
+            str(params.get("actor", "humain") or "humain").strip(),
+            current,
+            target,
+            as_agent=bool(params.get("as_agent", False)),
+            task_id=str(rec["meta"].get("id", "")),
+        )
+
+
+def _assert_md_in_sync(board_dir: Path, cfg: dict) -> None:
+    """Garde KANBAN.md vérifiée AVANT d'écrire : en cas de retouche manuelle, rien n'est enregistré."""
+    drift, _ = check_kanban_md_drift(board_dir, cfg)
+    if drift:
+        raise KanbanDriftError(
+            "Aucune modification n'a été enregistrée : KANBAN.md a été modifié manuellement depuis "
+            "le dernier rendu (ex. dans Obsidian). Exécutez d'abord 'python kanban.py sync-md' pour "
+            "rapatrier vos modifications (ou 'python kanban.py render --force-md' pour écraser KANBAN.md), "
+            "puis relancez votre action."
+        )
+
+
+def _precheck_before_write(board_dir: Path, cfg: dict, op: str, params: dict | None = None) -> None:
+    _pre_validate_gate(board_dir, cfg, op, params or {})
+    _assert_md_in_sync(board_dir, cfg)
+
+
+def _describe_saved(res: dict) -> str:
+    action = str(res.get("action", "action"))
+    tid = res.get("id")
+    if action == "move" and tid:
+        return f"{tid} déplacée de '{res.get('from', '')}' vers '{res.get('to', '')}'"
+    if action == "batch":
+        return f"{res.get('count', 0)} opération(s) du lot"
+    if action == "archive":
+        return f"archivage de {', '.join(res.get('archived_ids') or []) or 'aucune carte'}"
+    if tid:
+        return f"'{action}' sur {tid}"
+    return f"'{action}'"
+
+
+def _render_after_write(board_dir: Path, cfg: dict, res: dict, **kwargs) -> dict:
+    """Rendu après une écriture réussie : si KANBAN.md a divergé entre-temps, le dire honnêtement."""
+    try:
+        return _render_board_unlocked(board_dir, cfg, **kwargs)
+    except KanbanDriftError as exc:
+        raise KanbanDriftError(
+            f"Action enregistrée dans les fiches des cartes ({_describe_saved(res)}), mais KANBAN.md "
+            "n'a pas été régénéré : il a été modifié manuellement entre-temps (ex. dans Obsidian). "
+            + DRIFT_RESYNC_HINT
+            + " Attention : 'sync-md' réapplique les colonnes lues dans KANBAN.md.",
+            saved=True,
+        ) from exc
+
+
 def _render_board_unlocked(
     board_dir: Path,
     cfg: dict,
@@ -3131,7 +3377,7 @@ def _render_board_unlocked(
 ) -> dict:
     drift, current_sha = check_kanban_md_drift(board_dir, cfg)
     if drift and not force_md:
-        raise KanbanError(
+        raise KanbanDriftError(
             "KANBAN.md a été modifié manuellement depuis le dernier rendu "
             "(ex. dans Obsidian). Exécutez 'sync-md' pour rapatrier vos modifications, "
             "ou utilisez '--force-md' pour écraser KANBAN.md."
@@ -4397,6 +4643,9 @@ def filter_tasks(enriched: list[dict], args: argparse.Namespace) -> list[dict]:
 def _run_batch(board_dir: Path, payload: list[dict], today_str: str | None) -> dict:
     if not isinstance(payload, list):
         raise KanbanError("Le JSON de 'batch' doit être un tableau d'opérations")
+    first_op = str(payload[0].get("op", "")).strip() if payload and isinstance(payload[0], dict) else ""
+    if first_op != "init" and (board_dir / "kanban.json").exists():
+        _assert_md_in_sync(board_dir, load_config(board_dir))
     results: list[dict] = []
     for idx, item in enumerate(payload):
         if not isinstance(item, dict) or "op" not in item:
@@ -4442,7 +4691,10 @@ def _run_batch(board_dir: Path, payload: list[dict], today_str: str | None) -> d
             raise KanbanError(f"Opération batch inconnue : {op!r}")
 
     cfg = load_config(board_dir)
-    render_info = _render_board_unlocked(board_dir, cfg, write_html=True, force_md=False, today_str=today_str)
+    render_info = _render_after_write(
+        board_dir, cfg, {"action": "batch", "count": len(results)},
+        write_html=True, force_md=False, today_str=today_str,
+    )
     return {"action": "batch", "operations": results, "count": len(results), "render": render_info}
 
 
@@ -4524,6 +4776,21 @@ def create_serve_httpd(
                 "application/json; charset=utf-8",
                 json.dumps(obj, ensure_ascii=False).encode("utf-8"),
             )
+
+        def _send_action_error(self, exc: KanbanError) -> None:
+            # Appelé uniquement après les contrôles Host/Origin/CSRF : l'état peut être renvoyé
+            # pour que l'écran reflète toujours le disque (jamais sur une réponse 403).
+            msg = str(exc)
+            drift = isinstance(exc, KanbanDriftError) or "modifié manuellement" in msg
+            body: dict = {"ok": False, "error": msg}
+            if drift:
+                body["code"] = "kanban_md_drift"
+                body["saved"] = bool(getattr(exc, "saved", False))
+            try:
+                body["state"] = current_payload()
+            except KanbanError:
+                pass
+            self._send_json(409 if drift else 400, body)
 
         def do_GET(self) -> None:
             self._script_nonce = ""
@@ -4658,14 +4925,13 @@ def create_serve_httpd(
                 try:
                     with BoardLock(board_dir):
                         cfg = load_config(board_dir)
+                        _precheck_before_write(board_dir, cfg, "attach", {"id": tid})
                         res = _op_attach(board_dir, cfg, tid, filename=fname, raw_bytes=raw_bytes)
-                        _render_board_unlocked(board_dir, cfg, write_html=True, today_str=today_str)
+                        _render_after_write(board_dir, cfg, res, write_html=True, today_str=today_str)
                         fresh = current_payload()
                     self._send_json(200, {"ok": True, "result": res, "state": fresh})
                 except KanbanError as exc:
-                    msg = str(exc)
-                    code = 409 if "modifié manuellement" in msg else 400
-                    self._send_json(code, {"ok": False, "error": msg})
+                    self._send_action_error(exc)
                 return
 
             if not isinstance(payload, dict) or not payload.get("op"):
@@ -4677,6 +4943,9 @@ def create_serve_httpd(
                 with BoardLock(board_dir):
                     cfg = load_config(board_dir)
                     rendered_already = False
+                    if op != "sync-md":
+                        # Garde KANBAN.md AVANT l'écriture : jamais « écrit sur disque mais annoncé en échec ».
+                        _precheck_before_write(board_dir, cfg, op, payload)
                     if op == "add":
                         res = _op_add(board_dir, cfg, payload)
                     elif op == "edit":
@@ -4725,13 +4994,11 @@ def create_serve_httpd(
                         raise KanbanError(f"Opération non supportée : {op!r}")
 
                     if not rendered_already:
-                        _render_board_unlocked(board_dir, cfg, write_html=True, today_str=today_str)
+                        _render_after_write(board_dir, cfg, res, write_html=True, today_str=today_str)
                     fresh = current_payload()
                 self._send_json(200, {"ok": True, "result": res, "state": fresh})
             except KanbanError as exc:
-                msg = str(exc)
-                code = 409 if "modifié manuellement" in msg else 400
-                self._send_json(code, {"ok": False, "error": msg})
+                self._send_action_error(exc)
 
     class _KanbanHTTPServer(ThreadingHTTPServer):
         allow_reuse_address = os.name != "nt"
@@ -4947,6 +5214,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _cli_gate_params(args: argparse.Namespace, cmd: str) -> dict:
+    """Paramètres utiles à la porte Agent/Humain, rejouée avant la garde KANBAN.md."""
+    if cmd not in ("add", "move"):
+        return {}
+    return {
+        "id": getattr(args, "id", ""),
+        "status": getattr(args, "status", None),
+        "actor": getattr(args, "actor", "humain"),
+        "as_agent": bool(getattr(args, "as_agent", False)),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_stdio()
     parser = build_parser()
@@ -4961,6 +5240,7 @@ def main(argv: list[str] | None = None) -> int:
         elif cmd == "add":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_add(
                     board_dir,
                     cfg,
@@ -4981,10 +5261,11 @@ def main(argv: list[str] | None = None) -> int:
                         "actor": args.actor,
                     },
                 )
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "edit":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_edit(
                     board_dir,
                     cfg,
@@ -5004,10 +5285,11 @@ def main(argv: list[str] | None = None) -> int:
                         "append_note": args.append_note,
                     },
                 )
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "move":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_move(
                     board_dir,
                     cfg,
@@ -5019,35 +5301,41 @@ def main(argv: list[str] | None = None) -> int:
                         "as_agent": args.as_agent,
                     },
                 )
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "claim":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_claim(board_dir, cfg, {"id": args.id, "by": args.by, "start": args.start, "force": args.force})
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "release":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_release(board_dir, {"id": args.id})
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "block":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_block(board_dir, {"id": args.id, "reason": args.reason}, blocked=True)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "unblock":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_block(board_dir, {"id": args.id}, blocked=False)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd in ("check", "uncheck"):
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_toggle_subtask(board_dir, {"id": args.id, "target": args.target}, checked=(cmd == "check"))
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "archive":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_archive(
                     board_dir,
                     cfg,
@@ -5059,22 +5347,25 @@ def main(argv: list[str] | None = None) -> int:
                         "today": args.today,
                     },
                 )
-                res["render"] = _render_board_unlocked(board_dir, cfg, today_str=args.today)
+                res["render"] = _render_after_write(board_dir, cfg, res, today_str=args.today)
         elif cmd == "delete":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_delete(board_dir, cfg, args.id, force=args.force)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "attach":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_attach(board_dir, cfg, args.id, source_path=args.file, ref_only=args.ref)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "detach":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_detach(board_dir, cfg, args.id, args.target)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "render":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
@@ -5092,6 +5383,7 @@ def main(argv: list[str] | None = None) -> int:
         elif cmd == "config":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_config(
                     board_dir,
                     cfg,
@@ -5106,17 +5398,19 @@ def main(argv: list[str] | None = None) -> int:
                         "rename_horizon": args.rename_horizon,
                     },
                 )
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "rename-category":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_rename_category(board_dir, cfg, args.old_name, args.new_name)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "rename-tag":
             with BoardLock(board_dir):
                 cfg = load_config(board_dir)
+                _precheck_before_write(board_dir, cfg, cmd, _cli_gate_params(args, cmd))
                 res = _op_rename_tag(board_dir, cfg, args.old_tag, args.new_tag)
-                res["render"] = _render_board_unlocked(board_dir, cfg)
+                res["render"] = _render_after_write(board_dir, cfg, res)
         elif cmd == "batch":
             if args.input_file:
                 raw_json = Path(args.input_file).read_text(encoding="utf-8")

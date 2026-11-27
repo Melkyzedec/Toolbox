@@ -1138,6 +1138,259 @@ class TestKanbanTasks(unittest.TestCase):
         finally:
             stop()
 
+    # ------------------------------------------------------------------
+    # Correctifs UX (audit Pôle 3) : B1/A1, B2/B3, D6/D7, D1/D2/D3/B4/D11
+    # ------------------------------------------------------------------
+    def _drift_kanban_md(self) -> None:
+        md_path = self.board_dir / "KANBAN.md"
+        md_path.write_bytes(md_path.read_bytes() + b"\nCANARY_TEST_retouche manuelle\n")
+
+    @staticmethod
+    def _task_status_in_state(state: dict, tid: str) -> str:
+        return next(t["status"] for t in state["tasks"] if t["id"] == tid)
+
+    def test_26_ux_api_drift_409_writes_nothing_and_returns_fresh_state(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init", "--title", "CANARY_TEST_Drift"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_carte 1", "--status", "idees"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_carte 2", "--status", "en_revue"]).returncode, 0)
+        self._drift_kanban_md()
+        before = {p.name: p.read_bytes() for p in (self.board_dir / "tasks").glob("*.md")}
+        port, token, stop = self._start_server()
+        try:
+            hdrs = {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"}
+            status, body = self._post_json(port, "/api/action", {"op": "move", "id": "T-001", "status": "a_faire"}, hdrs)
+            self.assertEqual(status, 409, body)
+            self.assertFalse(body["ok"])
+            self.assertEqual(body.get("code"), "kanban_md_drift")
+            self.assertIn("sync-md", body["error"])
+            self.assertIn("state", body, "la 409 doit renvoyer l'état réel du disque")
+            self.assertEqual(self._task_status_in_state(body["state"], "T-001"), "idees")
+            # Rien n'a été écrit : l'écran (state) et le disque disent la même chose
+            self.assertEqual(self._status("T-001"), "idees")
+            self.assertEqual(before, {p.name: p.read_bytes() for p in (self.board_dir / "tasks").glob("*.md")})
+
+            b64 = base64.b64encode(b"CANARY_TEST_piece").decode("ascii")
+            status, body = self._post_json(port, "/api/upload",
+                                           {"id": "T-001", "filename": "piece.txt", "content_base64": b64}, hdrs)
+            self.assertEqual(status, 409, body)
+            self.assertEqual(body.get("code"), "kanban_md_drift")
+            self.assertIn("state", body)
+            self.assertFalse((self.board_dir / "attachments" / "T-001").exists())
+
+            # Porte de validation toujours prioritaire, même KANBAN.md divergent
+            status, body = self._post_json(port, "/api/action",
+                                           {"op": "move", "id": "T-002", "status": "termine",
+                                            "actor": "agent:CANARY_TEST_bot"}, hdrs)
+            self.assertEqual(status, 400, body)
+            self.assertIn("Garde-fou Agent/Humain", body["error"])
+            self.assertEqual(self._status("T-002"), "en_revue")
+
+            # Une erreur métier ordinaire renvoie aussi l'état à jour
+            status, body = self._post_json(port, "/api/action", {"op": "move", "id": "T-404", "status": "a_faire"}, hdrs)
+            self.assertEqual(status, 400, body)
+            self.assertIn("state", body)
+
+            # Les refus de sécurité (403) ne divulguent jamais l'état
+            status, body = self._post_json(port, "/api/action", {"op": "sync-md"}, {"Origin": f"http://127.0.0.1:{port}"})
+            self.assertEqual(status, 403, body)
+            self.assertNotIn("state", body)
+            status, body = self._post_json(port, "/api/action", {"op": "sync-md"}, {"X-Kanban-Token": token})
+            self.assertEqual(status, 403, body)
+            self.assertNotIn("state", body)
+
+            # Bouton « Récupérer mes modifications » = op sync-md, puis l'action passe
+            status, body = self._post_json(port, "/api/action", {"op": "sync-md"}, hdrs)
+            self.assertEqual(status, 200, body)
+            status, body = self._post_json(port, "/api/action", {"op": "move", "id": "T-001", "status": "a_faire"}, hdrs)
+            self.assertEqual(status, 200, body)
+            self.assertEqual(self._task_status_in_state(body["state"], "T-001"), "a_faire")
+        finally:
+            stop()
+        self.assertEqual(self._status("T-001"), "a_faire")
+
+    def test_27_ux_cli_drift_message_is_honest(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_carte 1", "--status", "idees"]).returncode, 0)
+        self._drift_kanban_md()
+
+        # Cas 1 : la garde est vérifiée AVANT d'écrire -> rien d'enregistré, et on le dit
+        for args in (["move", "T-001", "a_faire"], ["add", "--title", "CANARY_TEST_carte 2"], ["block", "T-001", "--reason", "x"]):
+            res = run_cli(self.board_dir, args)
+            self.assertNotEqual(res.returncode, 0, res.stdout)
+            err = json.loads(res.stdout)["error"]
+            self.assertIn("Aucune modification n'a été enregistrée", err, args)
+            self.assertIn("sync-md", err)
+        self.assertEqual(self._status("T-001"), "idees")
+        self.assertEqual(len(list((self.board_dir / "tasks").glob("*.md"))), 1)
+
+        res = run_cli(self.board_dir, ["batch", "--stdin"],
+                      stdin_text=json.dumps([{"op": "move", "id": "T-001", "status": "a_faire"}]))
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("Aucune modification n'a été enregistrée", json.loads(res.stdout)["error"])
+        self.assertEqual(self._status("T-001"), "idees")
+
+        # Cas 2 : KANBAN.md retouché ENTRE l'écriture et le rendu -> message honnête
+        self.assertEqual(run_cli(self.board_dir, ["sync-md"]).returncode, 0)
+        cfg = kanban.load_config(self.board_dir)
+        res = kanban._op_move(self.board_dir, cfg, {"id": "T-001", "status": "a_faire"})
+        self._drift_kanban_md()
+        with self.assertRaises(kanban.KanbanError) as ctx:
+            kanban._render_after_write(self.board_dir, cfg, res)
+        msg = str(ctx.exception)
+        self.assertIn("enregistré", msg)
+        self.assertIn("T-001", msg)
+        self.assertIn("python kanban.py sync-md", msg)
+        self.assertIn("python kanban.py render --force-md", msg)
+        self.assertNotIn("Aucune modification", msg)
+        self.assertEqual(self._status("T-001"), "a_faire")
+
+    def test_28_ux_quick_orders_follow_agent_human_rule(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init"]).returncode, 0)
+        cfg = kanban.load_config(self.board_dir)
+
+        def orders(status: str, blocked: bool = False, archived: bool = False) -> list[str]:
+            role = kanban.get_column_map(cfg)[status]["role"]
+            return kanban.build_quick_orders(cfg, {"id": "T-007", "status": status, "role": role,
+                                                   "blocked": blocked, "archived": archived})
+
+        for status in ("idees", "a_faire", "en_cours", "en_revue", "termine"):
+            for blocked in (False, True):
+                for o in orders(status, blocked):
+                    self.assertNotIn("Valide", o)
+                    self.assertNotIn("termin", o.lower(), f"{status}: {o}")
+        self.assertIn("Passe T-007 dans la colonne « En cours »", orders("a_faire"))
+        self.assertIn("Passe T-007 dans la colonne « En cours »", orders("idees"))
+        self.assertNotIn("Passe T-007 dans la colonne « En cours »", orders("en_cours"))
+        self.assertIn("Passe T-007 dans la colonne « En revue »", orders("en_cours"))
+        review = orders("en_revue")
+        self.assertEqual(review[0], "Prépare T-007 pour ma validation humaine (récapitulatif de revue)")
+        self.assertFalse(any("en cours" in o.lower() and o.startswith("Passe") for o in review))
+        self.assertEqual(orders("termine"), [])
+        self.assertEqual(orders("a_faire", archived=True), [])
+        self.assertEqual(orders("en_cours", blocked=True)[0], "Débloque T-007")
+        self.assertFalse(any(o.startswith("Bloque") for o in orders("en_cours", blocked=True)))
+
+        # Les ordres arrivent dans les données de la page ; le gabarit n'en invente plus
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_revue", "--status", "en_revue"]).returncode, 0)
+        html_text = (self.board_dir / "kanban.html").read_text(encoding="utf-8")
+        self.assertIn("Prépare T-001 pour ma validation humaine", html_text)
+        tpl = kanban.HTML_TEMPLATE
+        self.assertNotIn("Valide ", tpl)
+        self.assertNotIn("en terminé", tpl)
+        self.assertNotIn('"Passe " + t.id', tpl)
+        self.assertIn("t.quick_orders", tpl)
+
+    @staticmethod
+    def _css_vars(css: str, selector: str) -> dict:
+        m = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
+        assert m, selector
+        return {k: v.strip() for k, v in re.findall(r"--([\w-]+)\s*:\s*([^;]+);", m.group(1))}
+
+    @staticmethod
+    def _rgba(value: str) -> tuple:
+        value = value.strip()
+        if value.startswith("#"):
+            h = value[1:]
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), 1.0)
+        nums = [float(x) for x in re.findall(r"[\d.]+", value)]
+        return (nums[0], nums[1], nums[2], nums[3] if len(nums) > 3 else 1.0)
+
+    @classmethod
+    def _contrast(cls, fg: str, bg: str, base: str) -> float:
+        def blend(c, under):
+            a = c[3]
+            return tuple(c[i] * a + under[i] * (1 - a) for i in range(3))
+
+        def lum(rgb):
+            out = []
+            for ch in rgb:
+                s = ch / 255
+                out.append(s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4)
+            return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+
+        base_rgb = cls._rgba(base)[:3]
+        bg_rgb = blend(cls._rgba(bg), base_rgb)
+        fg_rgb = blend(cls._rgba(fg), bg_rgb)
+        l1, l2 = sorted((lum(fg_rgb), lum(bg_rgb)), reverse=True)
+        return (l1 + 0.05) / (l2 + 0.05)
+
+    def test_29_ux_wcag_contrast_and_min_font_size(self) -> None:
+        tpl = kanban.HTML_TEMPLATE
+        css = tpl[tpl.index("<style>"):tpl.index("</style>")]
+        light = self._css_vars(css, ":root")
+        dark = dict(light)
+        dark.update(self._css_vars(css, '[data-theme="dark"]'))
+        pairs = [
+            ("danger", "danger-soft"), ("warn", "warn-soft"), ("ok", "ok-soft"),
+            ("purple", "purple-soft"), ("accent", "accent-soft"),
+            ("muted", "surface"), ("muted", "surface-alt"), ("text", "surface"), ("text", "surface-alt"),
+            ("accent", "surface"), ("danger", "surface"),
+            ("on-accent", "accent"), ("on-ok", "ok"), ("on-danger", "danger"),
+            ("alert-text", "alert-bg"),
+        ]
+        for theme_name, theme in (("clair", light), ("sombre", dark)):
+            for fg, bg in pairs:
+                ratio = self._contrast(theme[fg], theme[bg], theme["surface"])
+                self.assertGreaterEqual(ratio, 4.5, f"thème {theme_name} : --{fg} sur --{bg} = {ratio:.2f}:1")
+        # Plus aucun blanc codé en dur sur un fond coloré : tout passe par --on-*
+        rules = css.split("}")
+        for rule in rules:
+            if re.search(r"background:\s*var\(--(accent|ok|danger)\)", rule) and "tl-today" not in rule:
+                self.assertNotIn("#ffffff", rule, rule)
+                self.assertRegex(rule, r"color:\s*var\(--on-(accent|ok|danger)\)", rule)
+        # Taille minimale : 12 px (0.75rem)
+        for size in re.findall(r"font-size:\s*([\d.]+)rem", css):
+            self.assertGreaterEqual(float(size), 0.75, f"font-size {size}rem < 12px")
+        for size in re.findall(r"font-size:\s*([\d.]+)px", css):
+            self.assertGreaterEqual(float(size), 12, f"font-size {size}px")
+        for size in re.findall(r"font-size:\s*([\d.]+)em", css):
+            self.assertGreaterEqual(float(size), 0.86, f"font-size {size}em trop petit dans un bloc à 0.88rem")
+
+    @staticmethod
+    def _js_function(tpl: str, name: str) -> str:
+        start = tpl.index("function " + name + "(")
+        nxt = tpl.find("\n  function ", start + 10)
+        return tpl[start:nxt if nxt != -1 else len(tpl)]
+
+    def test_30_ux_persistent_error_banner_and_contextual_actions(self) -> None:
+        tpl = kanban.HTML_TEMPLATE
+        # Bandeau persistant accessible, distinct du toast de succès
+        self.assertRegex(tpl, r'<div id="error-banner"[^>]*role="alert"')
+        banner = self._js_function(tpl, "showErrorBanner")
+        self.assertNotIn("setTimeout", banner, "le bandeau d'erreur ne doit pas disparaître seul")
+        self.assertIn("createElement", tpl[tpl.index("function showErrorBanner"):])
+        self.assertIn("Fermer", banner)
+        self.assertNotIn("innerHTML", tpl)
+        self.assertNotIn('showToast("Erreur', tpl)
+        self.assertNotIn("showToast(\"Serveur local inaccessible", tpl)
+        # Actions contextuelles en français clair
+        handler = self._js_function(tpl, "handleApiError")
+        self.assertIn("409", handler)
+        self.assertIn("Récupérer mes modifications", handler)
+        self.assertIn('op: "sync-md"', handler)
+        self.assertIn("403", handler)
+        self.assertIn("La session du tableau a expiré. Rechargez la page.", handler)
+        self.assertIn("Recharger la page", handler)
+        self.assertIn("Réessayer", tpl)
+        self.assertNotIn("CSRF", handler)
+        # L'écran se resynchronise avec le disque après toute erreur
+        run_api = self._js_function(tpl, "runApiAction")
+        self.assertIn("handleApiError", run_api)
+        self.assertIn("DATA = body.state", handler)
+        self.assertIn("refreshFromServer(", handler)
+        refresh = self._js_function(tpl, "refreshFromServer")
+        self.assertIn("res.ok", refresh)
+        self.assertIn("Réessayer", refresh)
+        upload = tpl[tpl.index('fetch("/api/upload"'):tpl.index('fetch("/api/upload"') + 1200]
+        self.assertIn("handleApiError", upload)
+        # Copie : plus d'échec silencieux
+        fallback = self._js_function(tpl, "fallbackCopy")
+        self.assertNotRegex(fallback, r"catch \(e\) \{\s*\}")
+        self.assertIn("Copie impossible", fallback)
+        self.assertRegex(fallback, r"execCommand\(\"copy\"\)")
+        # Le toast court reste réservé aux succès
+        self.assertIn("setTimeout", self._js_function(tpl, "showToast"))
+
 
 if __name__ == "__main__":
     unittest.main()
