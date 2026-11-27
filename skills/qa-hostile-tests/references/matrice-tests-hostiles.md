@@ -28,6 +28,14 @@ Même sans aucun calcul financier, tout logiciel a une logique à attaquer :
 - **Isolation Git / Temp :** si un test vérifie le comportement « hors dépôt Git » sous `%TEMP%`, utiliser `GIT_CEILING_DIRECTORIES` pour éviter de remonter vers un éventuel `.git` ancêtre dans `%USERPROFILE%`.
 - Noms réservés Windows (`CON`, `NUL`, `PRN`, `AUX`, `COM1`, `LPT1`) si le programme crée des dossiers/fichiers depuis des saisies utilisateur.
 
+### Checklist Windows (6 points, issus de bugs réels)
+1. **Fixtures binaires/LF :** écris-les avec `write_bytes` (jamais `write_text`, qui convertit `\n` en `\r\n` sous Windows).
+2. **Chemins absolus portables :** construis-les via `os.path.abspath(...)` ; depuis Python 3.13 sous Windows, `os.path.isabs("\\x")` renvoie `False`.
+3. **Un sous-dossier temporaire par nom de fichier testé :** NTFS ignore la casse (`NUL` et `nul` entrent en collision).
+4. **Handles fermés sur erreur :** ouvre avec `with open(..., "rb")` avant de passer le flux à un parseur tiers (sinon `WinError 32` au nettoyage).
+5. **BOM UTF-8 :** teste la lecture JSON/CSV avec BOM (`utf-8-sig`, produit par Windows PowerShell 5.1) et vérifie que l'écriture reste sans BOM.
+6. **Vrai passage Windows avant fusion :** tout code produit sous Linux/Cloud passe une exécution réelle Windows + PowerShell (jonctions NTFS comprises).
+
 ## 5. Frontières Sécurité, Canaris DLP (`CANARY_TEST_`), SAST & Calculs
 - **Chemins & symlinks :** path traversal (`../secret`, préfixe voisin `../projet-evil`), chemin absolu externe, jonction NTFS (`junction`) et **lien symbolique pendant (*dangling symlink*)** en écriture.
 - **Canaris DLP / Secrets (`CANARY_TEST_`) & bundles web :**
@@ -40,4 +48,9 @@ Même sans aucun calcul financier, tout logiciel a une logique à attaquer :
 ## 6. Discipline d'Écriture des Tests (Zéro Test Passoire & TDD)
 - **Assertions précises :** pas de simple `assert(res)` ni `assert.throws(fn)` nu ; vérifier le code d'erreur exact (`err.code`), les clés/valeurs retournées **et** l'état relu sur disque après fermeture.
 - **Autonomie complète :** chaque bloc/test prépare son propre répertoire temporaire isolé (pas de dépendance cachée à l'ordre entre scénarios ni au profil utilisateur réel).
+- **Hygiène tests & scanners (`check-release`, Gitleaks, CodeQL) :**
+  - Jamais de BOM ni d'Unicode invisible littéral dans un test : génère-les (`chr(0xFEFF)`, `"\u200b"`).
+  - Jamais de variable ou fixture écrite sur disque nommée `secret`, `key` ou `passwd` : préfère des noms neutres (`canary_value`, `sample_token`).
+  - Pour inspecter du HTML, utilise `html.parser.HTMLParser` plutôt qu'une regex sur `<script>` (signalée par CodeQL).
+  - Données fictives uniquement : `CANARY_TEST_` / `@example.test`.
 - **Règle d'échec honnête (`Red -> Green`) :** en reprise (`Brownfield Gate`) comme en TDD, quand un test casse le moteur, le laisser échouer proprement (ou le consigner explicitement comme `ÉCHEC CONFIRMÉ — BUG MOTEUR`) sans jamais bricoler la tolérance pour afficher vert.
