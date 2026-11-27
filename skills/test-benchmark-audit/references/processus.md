@@ -8,11 +8,13 @@ Ce document décrit les 3 modes séquentiels d'audit hostile, de correction guid
 
 ```mermaid
 flowchart TB
-    RULES["Garde-fous transverses (Modes 1, 2 & 3)\n• Safety-Net 0-token · Zero Untrusted External Code\n• 0 USD (aucun run LLM live par defaut) · Temp dir nettoye en finally\n• Fixtures CANARY_TEST_ / @example.test · Preuves fichier:ligne verifiees"]
+    RULES["Garde-fous transverses (Modes 0, 1, 2 & 3)\n• Safety-Net 0-token · Zero Untrusted External Code\n• 0 USD (aucun run LLM live par defaut) · Temp dir nettoye en finally\n• Fixtures CANARY_TEST_ / @example.test · Preuves fichier:ligne verifiees"]
+
+    M0["Mode 0 (optionnel) — Audit Architecture Soustractif a froid\nPromesses vs Code -> Garder/Durcir/Fusionner/Supprimer\n-> Carte des imports -> Plan lots A/B/C"]
 
     subgraph M1["Mode 1 — Audit Hostile & Brownfield Gate (defaut · Lecture seule)"]
         A1["Etape A : Cartographie & hygiene DLP/SAST\n(scinde en 2 passes si > 1800 lignes)"]
-        A2["Etape B : Grille 7 axes (references/grille-audit-hostile.md)\ndont trace TDD Red->Green & Skill-Scanner"]
+        A2["Etape B : Grille 7 axes (references/grille-audit-hostile.md)\nTDD Red->Green · Skill-Scanner · Grille Anti-Biais Benchmark (5 regles)"]
         A3["Etape C : Priorisation (Critique / Haute / Moyenne / Basse)"]
         A4["Etape D : Rapport .md obligatoire dans le dossier audite\n(sans ecraser l'historique)"]
         A1 --> A2 --> A3 --> A4
@@ -35,6 +37,8 @@ flowchart TB
         V1 --> V2 --> V3 --> V4
     end
 
+    RULES --> M0
+    M0 -.->|"optionnel"| M1
     RULES --> M1 --> STOP1
     STOP1 -->|"Oui"| M2 --> M3
     STOP1 -->|"Contre-verification directe"| M3

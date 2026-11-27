@@ -19,7 +19,7 @@ flowchart TB
     S2["Etape 2 : Batir la matrice d'attaque (references/matrice-tests-hostiles.md)\n1. E2E boite noire · 2. Invariants & machine a etats\n3. Sabotage d'entrees & pannes · 4. Pieges Windows/OS\n5. Traversal/symlinks/DLP CANARY_TEST_ / SAST · 6. Mutation thinking"]
     S3["Etape 3 : Ecrire la suite isolee\nFichier dedie en dossier temp nettoye en finally"]
     WIN["Checklist Windows (6 points)\n1. write_bytes · 2. os.path.abspath · 3. 1 sous-dossier par nom (NUL vs nul)\n4. with open rb (WinError 32) · 5. BOM utf-8-sig lu, jamais ecrit\n6. Vrai passage Windows + PowerShell avant fusion"]
-    HYG["Hygiene tests & scanners\nBOM/invisibles generes (chr 0xFEFF) · noms de fixtures neutres\nHTMLParser plutot que regex script · CANARY_TEST_ / @example.test"]
+    HYG["Hygiene tests & scanners\nBOM/invisibles generes (chr 0xFEFF) · noms de fixtures neutres\nHTMLParser plutot que regex script · SKIP OS explicite & concurrence horodatee · CANARY_TEST_ / @example.test"]
     S4["Etape 4 : Executer + Porte deterministe\nSuite + existants (0 USD) + check-release.ps1 -Fast si disponible\nDistinction stricte : vrai bug moteur vs defaut de fixture"]
     S5["Etape 5 : Restitution en 4 points (francais clair)\n1. Logique comprise · 2. Ce qui passe (X/X)\n3. Failles provoquees (fichier:ligne) · 4. Correctifs recommandes pour Jalon GREEN"]
 

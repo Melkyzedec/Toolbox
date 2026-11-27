@@ -52,5 +52,6 @@ Même sans aucun calcul financier, tout logiciel a une logique à attaquer :
   - Jamais de BOM ni d'Unicode invisible littéral dans un test : génère-les (`chr(0xFEFF)`, `"\u200b"`).
   - Jamais de variable ou fixture écrite sur disque nommée `secret`, `key` ou `passwd` : préfère des noms neutres (`canary_value`, `sample_token`).
   - Pour inspecter du HTML, utilise `html.parser.HTMLParser` plutôt qu'une regex sur `<script>` (signalée par CodeQL).
+  - **Honnêteté OS & concurrence :** `SKIP` explicite hors Windows pour tout test Windows-only (zéro `PASS` muet sous Linux/Cloud) ; preuve horodatée d'un chevauchement réel des processus pour tout test de concurrence.
   - Données fictives uniquement : `CANARY_TEST_` / `@example.test`.
 - **Règle d'échec honnête (`Red -> Green`) :** en reprise (`Brownfield Gate`) comme en TDD, quand un test casse le moteur, le laisser échouer proprement (ou le consigner explicitement comme `ÉCHEC CONFIRMÉ — BUG MOTEUR`) sans jamais bricoler la tolérance pour afficher vert.
