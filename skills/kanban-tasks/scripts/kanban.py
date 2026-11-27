@@ -106,6 +106,20 @@ SAFE_ATTACHMENT_MIME_TYPES = {
 SAFE_ATTACHMENT_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 RASTER_ATTACHMENT_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+# Fichiers privés jamais copiés en pièce jointe (même liste que la porte check-release.ps1).
+PRIVATE_FILENAME_RE = re.compile(
+    r"(?i)^(?:"
+    r"\.env(?:\..*)?"
+    r"|id_(?:rsa|ed25519|ecdsa|dsa)(?:\..*)?"
+    r"|credentials(?:\..*)?"
+    r"|.*service[-_]account.*"
+    r"|client[-_]secrets?.*"
+    r"|secrets?(?:\..*)?"
+    r"|\.git-credentials|\.netrc|\.pgpass|\.npmrc|\.pypirc|\.htpasswd"
+    r"|.*\.(?:pem|key|pfx|p12|keystore|jks|kdbx|sqlite3?|db)(?:-(?:wal|shm|journal))?"
+    r")$"
+)
+PRIVATE_DIR_NAMES = {".ssh", ".aws", ".gnupg", ".git", ".memento", ".kube", ".docker"}
 
 
 class KanbanError(Exception):
@@ -3085,6 +3099,7 @@ def render_kanban_html(
     today_str: str | None = None,
     interactive: bool = False,
     csrf_token: str = "",
+    script_nonce: str = "",
 ) -> str:
     payload = build_html_payload(
         cfg,
@@ -3094,8 +3109,14 @@ def render_kanban_html(
         csrf_token=csrf_token,
     )
     page_title = html.escape(str(cfg.get("title", "Tableau Kanban")), quote=True)
+    template = HTML_TEMPLATE
+    if script_nonce:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", script_nonce):
+            raise KanbanError("Nonce CSP invalide")
+        # Injecté dans le gabarit AVANT l'insertion des données : un titre contenant <script> reste intact.
+        template = template.replace("<script", f'<script nonce="{script_nonce}"')
     return (
-        HTML_TEMPLATE
+        template
         .replace("__PAGE_TITLE__", page_title)
         .replace("__KANBAN_DATA__", safe_json_for_html(payload))
     )
@@ -3182,6 +3203,40 @@ def _assert_no_dependency_cycles(
         raise KanbanError("Cycle de dépendances détecté : " + " -> ".join(cycles[0]))
 
 
+def is_agent_actor(actor: str | None, as_agent: bool = False) -> bool:
+    """Un acteur est un agent s'il le déclare (--as-agent) ou si son nom commence par 'agent:'."""
+    return bool(as_agent) or str(actor or "").strip().lower().startswith("agent:")
+
+
+def assert_transition_allowed(
+    cfg: dict,
+    actor: str | None,
+    from_status: str,
+    to_status: str,
+    *,
+    as_agent: bool = False,
+    task_id: str = "",
+) -> None:
+    """Règle unique Agent/Humain : seul un humain fait entrer une carte dans une colonne « done ».
+
+    Appelée par add, move, save_card (CLI, batch et API) et sync-md. Aucun paramètre ne la lève.
+    """
+    if str(from_status or "") == str(to_status or ""):
+        return
+    target_col = get_column_map(cfg).get(str(to_status or ""))
+    if target_col is None or target_col.get("role") != "done":
+        return
+    if not is_agent_actor(actor, as_agent):
+        return
+    review_cols = [c["id"] for c in cfg["columns"] if c.get("role") == "review"]
+    hint = review_cols[0] if review_cols else "en_revue"
+    label = f"'{task_id}'" if task_id else "cette carte"
+    raise KanbanError(
+        f"Garde-fou Agent/Humain : un agent ne peut pas valider {label} directement en "
+        f"'{to_status}'. Déplacez-la vers '{hint}' pour validation humaine."
+    )
+
+
 def _split_csv(value: str | list[str] | None) -> list[str]:
     if not value:
         return []
@@ -3200,6 +3255,16 @@ def sanitize_attachment_name(name: str) -> str:
         raise KanbanError(f"Extension non autorisée '{ext or '(aucune)'}'. Autorisées : {allowed}")
     stem = slugify(Path(base).stem, max_len=60)
     return f"{stem}{ext}"
+
+
+def is_private_file(path_or_name: str | Path) -> bool:
+    """Vrai si le nom ou un dossier parent correspond à un fichier privé (Safety-Net)."""
+    parts = Path(str(path_or_name).replace("\\", "/")).parts
+    if not parts:
+        return False
+    if PRIVATE_FILENAME_RE.match(parts[-1]):
+        return True
+    return any(part.lower() in PRIVATE_DIR_NAMES for part in parts[:-1])
 
 
 def _validate_attachment_refs(refs: list[str]) -> list[str]:
@@ -3261,6 +3326,13 @@ def _op_add(board_dir: Path, cfg: dict, params: dict) -> dict:
     due_date = str(params.get("due_date", "") or "").strip()
     defer_until = str(params.get("defer_until", "") or "").strip()
     _validate_task_fields(cfg, status, priority, horizon, start_date, due_date, defer_until)
+    assert_transition_allowed(
+        cfg,
+        str(params.get("actor", "humain") or "humain"),
+        "",
+        status,
+        as_agent=bool(params.get("as_agent", False)),
+    )
 
     active, archived = load_all_records(board_dir)
     all_ids = {str(r["meta"].get("id", "")) for r in (active + archived)}
@@ -3382,6 +3454,15 @@ def _op_save_card(board_dir: Path, cfg: dict, params: dict) -> dict:
         meta["attachments"] = _validate_attachment_refs(_split_csv(params["attachments"]))
 
     new_status = str(params.get("status") or meta.get("status", "")).strip()
+    actor = str(params.get("actor", "humain") or "humain").strip()
+    assert_transition_allowed(
+        cfg,
+        actor,
+        str(meta.get("status", "")),
+        new_status,
+        as_agent=bool(params.get("as_agent", False)),
+        task_id=str(meta["id"]),
+    )
     _validate_task_fields(
         cfg,
         new_status,
@@ -3407,7 +3488,6 @@ def _op_save_card(board_dir: Path, cfg: dict, params: dict) -> dict:
         body = str(params["body"]).replace("\r\n", "\n").replace("\r", "\n").strip()
 
     now_iso = format_utc(utc_now())
-    actor = str(params.get("actor", "humain") or "humain").strip()
     old_status = str(meta.get("status", ""))
     if old_status != new_status:
         history = list(meta.get("history") or [])
@@ -3494,6 +3574,8 @@ def _op_attach(
     else:
         if source_path:
             src = Path(source_path)
+            if is_private_file(src) or (src.exists() and is_private_file(src.resolve())):
+                raise KanbanError(f"Fichier privé refusé en pièce jointe : {src.name}")
             if not src.is_file():
                 raise KanbanError(f"Fichier introuvable : {source_path}")
             if src.stat().st_size > MAX_ATTACHMENT_BYTES:
@@ -3508,6 +3590,8 @@ def _op_attach(
         else:
             raise KanbanError("Précisez un fichier (--file) ou une référence (--ref)")
 
+        if is_private_file(orig_name):
+            raise KanbanError(f"Fichier privé refusé en pièce jointe : {Path(str(orig_name)).name}")
         safe_name = sanitize_attachment_name(orig_name)
         if not SAFE_ATTACHMENT_FILENAME_RE.fullmatch(safe_name) or ".." in safe_name:
             raise KanbanError("Nom de pièce jointe invalide")
@@ -3518,6 +3602,8 @@ def _op_attach(
         if not att_dir_str.startswith(att_root_str + os.sep):
             raise KanbanError("Dossier de pièce jointe invalide")
         os.makedirs(att_dir_str, exist_ok=True)
+        if os.path.islink(att_dir_str) or os.path.normpath(os.path.realpath(att_dir_str)) != att_dir_str:
+            raise KanbanError("Dossier de pièce jointe invalide (lien symbolique ou jonction)")
         dest_str = os.path.normpath(os.path.join(att_dir_str, safe_name))
         if not dest_str.startswith(att_dir_str + os.sep):
             raise KanbanError("Chemin de pièce jointe invalide")
@@ -3587,16 +3673,15 @@ def _op_move(board_dir: Path, cfg: dict, params: dict) -> dict:
         raise KanbanError(f"Colonne inconnue : {target_status!r}. Disponibles : {', '.join(col_map)}")
 
     actor = str(params.get("actor", "humain") or "humain").strip()
-    as_agent = bool(params.get("as_agent", False)) or actor.lower().startswith("agent:")
-    force_done = bool(params.get("force_done", False))
     target_col = col_map[target_status]
-    if as_agent and target_col.get("role") == "done" and not force_done:
-        review_cols = [c["id"] for c in cfg["columns"] if c.get("role") == "review"]
-        hint = review_cols[0] if review_cols else "en_revue"
-        raise KanbanError(
-            f"Garde-fou Agent/Humain : un agent ne peut pas valider '{meta['id']}' directement en "
-            f"'{target_status}'. Déplacez-la vers '{hint}' pour validation humaine."
-        )
+    assert_transition_allowed(
+        cfg,
+        actor,
+        str(meta.get("status", "")),
+        target_status,
+        as_agent=bool(params.get("as_agent", False)),
+        task_id=str(meta["id"]),
+    )
 
     old_status = str(meta.get("status", ""))
     now_iso = format_utc(utc_now())
@@ -4051,6 +4136,9 @@ def _op_sync_md(board_dir: Path, cfg: dict, actor: str, dry_run: bool) -> dict:
             if old_status != current_col_id:
                 changes.append({"id": rec["meta"]["id"], "from": old_status, "to": current_col_id})
 
+    for ch in changes:
+        assert_transition_allowed(cfg, actor, ch["from"], ch["to"], task_id=str(ch["id"]))
+
     if not dry_run:
         now_iso = format_utc(utc_now())
         for ch in changes:
@@ -4381,8 +4469,46 @@ def create_serve_httpd(
         )
 
     class KanbanHandler(BaseHTTPRequestHandler):
+        server_version = "kanban-tasks"
+        sys_version = ""
+        _script_nonce = ""
+
         def log_message(self, format: str, *args) -> None:
             return
+
+        def _allowed_hosts(self) -> set[str]:
+            port = self.server.server_address[1]
+            return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+        def _host_ok(self) -> bool:
+            # Anti DNS rebinding : seul un Host local exact (avec le port réel) est servi.
+            return str(self.headers.get("Host", "")).strip().lower() in self._allowed_hosts()
+
+        def _origin_ok(self) -> bool:
+            # Requête d'écriture : Origin local exact, ou à défaut Sec-Fetch-Site: same-origin.
+            fetch_site = self.headers.get("Sec-Fetch-Site")
+            if fetch_site is not None and fetch_site.strip().lower() != "same-origin":
+                return False
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                return origin.strip().lower() in {f"http://{h}" for h in self._allowed_hosts()}
+            return fetch_site is not None
+
+        def end_headers(self) -> None:
+            script_src = "'self'"
+            if self._script_nonce:
+                script_src += f" 'nonce-{self._script_nonce}'"
+            self.send_header(
+                "Content-Security-Policy",
+                f"default-src 'self'; script-src {script_src}; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; "
+                "frame-ancestors 'none'",
+            )
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+            super().end_headers()
 
         def _send_bytes(self, code: int, content_type: str, data: bytes) -> None:
             self.send_response(code)
@@ -4400,18 +4526,24 @@ def create_serve_httpd(
             )
 
         def do_GET(self) -> None:
+            self._script_nonce = ""
+            if not self._host_ok():
+                self._send_json(403, {"ok": False, "error": "Hôte refusé"})
+                return
             path = urlparse(self.path).path
             try:
                 if path in ("/", "/kanban.html"):
                     cfg = load_config(board_dir)
                     active, archived = load_all_records(board_dir)
                     enriched = enrich_records(active, archived, cfg, today_str=today_str)
+                    self._script_nonce = secrets.token_urlsafe(18)
                     page = render_kanban_html(
                         cfg,
                         enriched,
                         today_str=today_str,
                         interactive=True,
                         csrf_token=csrf_token,
+                        script_nonce=self._script_nonce,
                     )
                     self._send_bytes(200, "text/html; charset=utf-8", page.encode("utf-8"))
                 elif path == "/api/state":
@@ -4431,7 +4563,12 @@ def create_serve_httpd(
                         return
                     att_root_str = os.path.normpath(os.path.realpath(str(board_dir / "attachments")))
                     att_dir_str = os.path.normpath(os.path.join(att_root_str, tid_seg))
-                    if not att_dir_str.startswith(att_root_str + os.sep) or not os.path.isdir(att_dir_str):
+                    if (
+                        not att_dir_str.startswith(att_root_str + os.sep)
+                        or not os.path.isdir(att_dir_str)
+                        or os.path.islink(att_dir_str)
+                        or os.path.normpath(os.path.realpath(att_dir_str)) != att_dir_str
+                    ):
                         self._send_json(404, {"ok": False, "error": "Pièce jointe introuvable"})
                         return
                     matched_name: str | None = None
@@ -4470,17 +4607,17 @@ def create_serve_httpd(
                 self._send_json(500, {"ok": False, "error": str(exc)})
 
         def do_POST(self) -> None:
+            self._script_nonce = ""
+            if not self._host_ok():
+                self._send_json(403, {"ok": False, "error": "Hôte refusé"})
+                return
+            if not self._origin_ok():
+                self._send_json(403, {"ok": False, "error": "Origine refusée"})
+                return
             path = urlparse(self.path).path
             if path not in ("/api/action", "/api/upload"):
                 self._send_json(404, {"ok": False, "error": "Endpoint introuvable"})
                 return
-
-            origin = self.headers.get("Origin")
-            if origin:
-                host = (urlparse(origin).hostname or "").lower()
-                if host not in ("127.0.0.1", "localhost"):
-                    self._send_json(403, {"ok": False, "error": "Origine refusée"})
-                    return
 
             token = self.headers.get("X-Kanban-Token", "")
             if not secrets.compare_digest(token, csrf_token):
@@ -4692,7 +4829,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_move.add_argument("--actor", default="humain")
     p_move.add_argument("--note", default="")
     p_move.add_argument("--as-agent", action="store_true")
-    p_move.add_argument("--force-done", action="store_true")
 
     p_claim = sub.add_parser("claim")
     p_claim.add_argument("id")
@@ -4881,7 +5017,6 @@ def main(argv: list[str] | None = None) -> int:
                         "actor": args.actor,
                         "note": args.note,
                         "as_agent": args.as_agent,
-                        "force_done": args.force_done,
                     },
                 )
                 res["render"] = _render_board_unlocked(board_dir, cfg)

@@ -10,7 +10,7 @@ Catalogue open source de **skills** et d'outils réutilisables pour assistants d
 | **`qa-hostile-tests`** | [`skills/qa-hostile-tests/`](./skills/qa-hostile-tests/) | Conçoit et exécute une batterie de tests hostiles boîte noire à `0 USD` (Pré-Dev TDD `Red -> Green` ou Mission 0 de reprise `Brownfield Gate`, cohérence d'état, sabotage d'entrées, pièges Windows, canaris DLP `CANARY_TEST_` et scan SAST). |
 | **`test-benchmark-audit`** | [`skills/test-benchmark-audit/`](./skills/test-benchmark-audit/) | Audite de manière hostile les suites de tests, oracles, garde-fous sécurité/RGPD/DLP/SAST et benchmarks A/B LLM (Mode 1 Audit & `Brownfield Gate`, Mode 2 Correction par tranches TDD `Red -> Green`, Mode 3 Réception globale et porte `check-release.ps1`). |
 | **`mon-standard-skill`** | [`skills/mon-standard-skill/`](./skills/mon-standard-skill/) | Standard d'architecture, de sécurité (`Skill-Scanner`, DLP, `Safety-Net`), de cycle de vie en 3 zones et de synchronisation multi-outils Windows (`UTF-8` sans BOM, SHA-256 vérifiés et archives `.zip` POSIX pour Claude Desktop). |
-| **`kanban-tasks`** | [`skills/kanban-tasks/`](./skills/kanban-tasks/) | Gère un tableau Kanban Markdown local (1 fichier `.md` par carte, compatible Obsidian `KANBAN.md`), vues interactives Kanban/Horizons/Frise, dépendances, pièces jointes, réglages de libellés et serveur web local `127.0.0.1` (`serve --open`) sans dépendance externe (Python 3 stdlib, 17 tests automatisés). |
+| **`kanban-tasks`** | [`skills/kanban-tasks/`](./skills/kanban-tasks/) | Gère un tableau Kanban Markdown local (1 fichier `.md` par carte, compatible Obsidian `KANBAN.md`), vues interactives Kanban/Horizons/Frise, dépendances, pièces jointes, réglages de libellés et serveur web local `127.0.0.1` (`serve --open`) sans dépendance externe (Python 3 stdlib, 25 tests automatisés). |
 
 ---
 
@@ -94,9 +94,9 @@ python -B ./skills/kanban-tasks/scripts/kanban.py --dir ./mon-kanban serve --ope
 ## Porte de sécurité déterministe (`check-release.ps1`)
 
 Le script de vérification [`skills/github-open-source-release/scripts/check-release.ps1`](./skills/github-open-source-release/scripts/check-release.ps1) inspecte quatre étages avant toute livraison ou publication :
-1. **`artifact-layout` :** structure des fichiers et archives `.zip` (imbriquées jusqu'à profondeur 3), blocage des symlinks/jonctions sortants, traversées `../`, doublons et fichiers privés (`.env`, `.sqlite`, `.pem`, `.key`).
-2. **`artifact-dlp` :** blocage déterministe des chemins machine privés Windows/Unix et des PII (IBAN, NIR, e-mails personnels), avec support de la convention `CANARY_TEST_` / `@example.test` pour les fixtures de test.
-3. **`artifact-sast` (`Skill-Scanner`) :** détection des caractères Unicode invisibles ou Bidi (*Trojan Source*) et des patterns d'exécution distante ou obfusquée.
+1. **`artifact-layout` :** structure des fichiers et de **toutes** les archives (artefact `.zip`, `.zip`, documents Office ou archives renommées rangés dans un dossier, imbriquées jusqu'à profondeur 3, lecture bornée à 500 Mio), blocage des symlinks/jonctions sortants, traversées `../`, doublons et fichiers privés (`.env*` hors `.env.example`, `.sqlite`, `.db`, `.pem`, `.key`, `.pfx`, `.kdbx`, `.tfstate`, `.ovpn`, `.kube/config`, `.docker/config.json`, etc.).
+2. **`artifact-dlp` :** blocage déterministe des chemins machine privés Windows/Unix et des PII (IBAN, NIR, téléphones, e-mails personnels). Les fixtures de test restent possibles **par valeur** : un chemin ou un jeton qui contient lui-même `CANARY_TEST_`, une adresse sur un domaine réservé (`@example.test`, `.example`, `.invalid`). Le marqueur n'exempte jamais une ligne entière ; un IBAN, un NIR ou un numéro fictif se construit à l'exécution.
+3. **`artifact-sast` (`Skill-Scanner`) :** détection des caractères Unicode invisibles ou Bidi (*Trojan Source*) et des patterns d'exécution distante ou obfusquée, sans aucune exemption hors des lignes marquées `CANARY_TEST_` sous `tests/fixtures/`.
 4. **`artifact-secrets` & `git-secrets` :** détection Gitleaks sur l'arbre, les archives et l'historique Git complet (`--all --full-history`).
 
 ### Prérequis
@@ -107,19 +107,32 @@ Le script de vérification [`skills/github-open-source-release/scripts/check-rel
 
 ### Exemples d'exécution locale
 
+Lancez le script avec `pwsh` (PowerShell 7+) s'il est installé, sinon `powershell` (Windows PowerShell 5.1) :
+
 ```powershell
-# 1. Mode rapide (-Fast, < 1s) en boucle TDD, fin de mission ou hook Git pre-commit
-powershell -NoProfile -File ./skills/github-open-source-release/scripts/check-release.ps1 `
+# 1. Mode rapide (-Fast) en boucle TDD, fin de mission ou hook Git pre-commit
+pwsh -NoProfile -File ./skills/github-open-source-release/scripts/check-release.ps1 `
   -ArtifactPath "C:\chemin\vers\dossier-ou-archive.zip" `
   -Fast
 
 # 2. Mode complet (avec -GitRoot) avant publication publique
-powershell -NoProfile -File ./skills/github-open-source-release/scripts/check-release.ps1 `
+pwsh -NoProfile -File ./skills/github-open-source-release/scripts/check-release.ps1 `
   -ArtifactPath "C:\chemin\vers\candidat-ou-archive.zip" `
   -GitRoot "C:\chemin\vers\depot-candidat"
 ```
 
-Le script retourne un résumé JSON strict (`status: "passed"` avec `mode`, `sha256` et `gitHistory`, ou `status: "blocked"` avec `stage` et `reason`, sans jamais exposer la valeur d'un secret ou d'une PII détectée dans la console).
+Le script retourne un résumé JSON strict (`status: "passed"` avec `mode`, `sha256` et `gitHistory`, ou `status: "blocked"` avec `stage` et `reason`, sans jamais exposer la valeur d'un secret ou d'une PII détectée dans la console). `mode` vaut `fast` avec `-Fast`, `full` seulement si l'historique Git a été contrôlé avec `-GitRoot`, et `partial` sinon : un résultat `partial` ne suffit pas avant une publication.
+
+### Lancer les tests du dépôt
+
+```bash
+python -B ./scripts/test_packaging.py -v
+python -B ./skills/kanban-tasks/scripts/test_kanban.py -v
+pwsh -NoProfile -File ./tests/test-check-release.ps1 -Gitleaks <chemin-de-gitleaks>
+pwsh -NoProfile -File ./tests/test-mutation-check.ps1
+```
+
+`test-check-release.ps1` s'arrête avec le code `2` (« SKIP ») si Gitleaks est introuvable, et avec le code `1` si la variable `CI` est définie.
 
 ---
 

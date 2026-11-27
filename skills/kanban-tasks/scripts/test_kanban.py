@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import re
@@ -445,7 +446,7 @@ class TestKanbanTasks(unittest.TestCase):
                 req = urllib.request.Request(
                     f"http://127.0.0.1:{port}/api/action",
                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "X-Kanban-Token": token},
+                    headers={"Content-Type": "application/json", "X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"},
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -551,7 +552,7 @@ class TestKanbanTasks(unittest.TestCase):
                 req = urllib.request.Request(
                     f"http://127.0.0.1:{port}/api/action",
                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "X-Kanban-Token": token},
+                    headers={"Content-Type": "application/json", "X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"},
                     method="POST",
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -655,7 +656,7 @@ class TestKanbanTasks(unittest.TestCase):
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/upload",
                 data=json.dumps({"id": "T-001", "filename": "spec.md", "content_base64": b64_ok}).encode("utf-8"),
-                headers={"Content-Type": "application/json", "X-Kanban-Token": token},
+                headers={"Content-Type": "application/json", "X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -672,7 +673,7 @@ class TestKanbanTasks(unittest.TestCase):
             bad_req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/upload",
                 data=json.dumps({"id": "T-001", "filename": "evil.svg", "content_base64": b64_ok}).encode("utf-8"),
-                headers={"Content-Type": "application/json", "X-Kanban-Token": token},
+                headers={"Content-Type": "application/json", "X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"},
                 method="POST",
             )
             with self.assertRaises(urllib.error.HTTPError) as ctx:
@@ -796,7 +797,7 @@ class TestKanbanTasks(unittest.TestCase):
             req = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/upload",
                 data=json.dumps({"id": "T-001", "filename": "rapport.md", "content_base64": b64_ok}).encode("utf-8"),
-                headers={"Content-Type": "application/json", "X-Kanban-Token": token},
+                headers={"Content-Type": "application/json", "X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
@@ -825,6 +826,317 @@ class TestKanbanTasks(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
             thread.join(timeout=2)
+
+
+    # ------------------------------------------------------------------
+    # Tranche Python (contre-audit 26/11/2026) : M-01, M-02, m-12, m-15
+    # ------------------------------------------------------------------
+    def _status(self, tid: str) -> str:
+        return json.loads(run_cli(self.board_dir, ["show", tid]).stdout)["status"]
+
+    def _start_server(self):
+        httpd, token = kanban.create_serve_httpd(self.board_dir, port=0)
+        port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+
+        def stop() -> None:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=2)
+
+        return port, token, stop
+
+    @staticmethod
+    def _raw_request(port: int, method: str, path: str, headers: dict, body: bytes | None = None):
+        """Requête HTTP brute (chemin non normalisé, en-têtes Host/Origin maîtrisés)."""
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+            for key, value in headers.items():
+                conn.putheader(key, value)
+            if body is not None:
+                conn.putheader("Content-Length", str(len(body)))
+            conn.endheaders(body)
+            resp = conn.getresponse()
+            data = resp.read()
+            return resp.status, {k.lower(): v for k, v in resp.getheaders()}, data
+        finally:
+            conn.close()
+
+    def _post_json(self, port: int, path: str, payload: dict, headers: dict):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        base = {"Host": f"127.0.0.1:{port}", "Content-Type": "application/json"}
+        base.update(headers)
+        status, hdrs, data = self._raw_request(port, "POST", path, base, body)
+        return status, json.loads(data.decode("utf-8")) if data else {}
+
+    def test_22_agent_cannot_reach_done_by_any_path(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init", "--title", "CANARY_TEST_Gate"]).returncode, 0)
+        for i in range(1, 5):
+            res = run_cli(self.board_dir, ["add", "--title", f"CANARY_TEST_Carte_{i}", "--status", "en_revue"])
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+        # Chemin 1a : batch move avec force_done (paramètre retiré)
+        res = run_cli(
+            self.board_dir,
+            ["batch", "--stdin"],
+            stdin_text=json.dumps([{"op": "move", "id": "T-001", "status": "termine",
+                                    "actor": "agent:CANARY_TEST_bot", "force_done": True}]),
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout)
+        self.assertIn("Garde-fou Agent/Humain", res.stdout + res.stderr)
+        self.assertEqual(self._status("T-001"), "en_revue")
+
+        # Chemin 1b : batch move avec as_agent sans préfixe agent:
+        res = run_cli(
+            self.board_dir,
+            ["batch", "--stdin"],
+            stdin_text=json.dumps([{"op": "move", "id": "T-001", "status": "termine",
+                                    "actor": "CANARY_TEST_robot", "as_agent": True}]),
+        )
+        self.assertNotEqual(res.returncode, 0, res.stdout)
+        self.assertEqual(self._status("T-001"), "en_revue")
+
+        # Chemin 1c : l'option CLI --force-done n'existe plus
+        res = run_cli(self.board_dir, ["move", "T-001", "termine", "--as-agent", "--force-done"])
+        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(self._status("T-001"), "en_revue")
+
+        # Chemin 1d : création directe en colonne terminée par un agent
+        res = run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_Direct", "--status", "termine",
+                                       "--actor", "agent:CANARY_TEST_bot"])
+        self.assertNotEqual(res.returncode, 0, res.stdout)
+        self.assertIn("Garde-fou Agent/Humain", res.stdout + res.stderr)
+        self.assertEqual(len(list((self.board_dir / "tasks").glob("*.md"))), 4)
+
+        # Chemin 3 : sync-md lancé par un agent après déplacement manuel dans KANBAN.md
+        md_path = self.board_dir / "KANBAN.md"
+        lines = md_path.read_text(encoding="utf-8").split("\n")
+        card_line = next(line for line in lines if "T-003" in line)
+        lines.remove(card_line)
+        done_idx = next(i for i, line in enumerate(lines) if line.strip().startswith("## Terminé"))
+        lines.insert(done_idx + 1, card_line)
+        md_path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+        res = run_cli(self.board_dir, ["sync-md", "--actor", "agent:CANARY_TEST_bot"])
+        self.assertNotEqual(res.returncode, 0, res.stdout)
+        self.assertIn("Garde-fou Agent/Humain", res.stdout + res.stderr)
+        self.assertEqual(self._status("T-003"), "en_revue")
+
+        # Chemin 2 : API save_card / move / sync-md côté serveur
+        port, token, stop = self._start_server()
+        try:
+            hdrs = {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"}
+            for payload in (
+                {"op": "save_card", "id": "T-002", "status": "termine", "actor": "agent:CANARY_TEST_bot"},
+                {"op": "save_card", "id": "T-002", "status": "termine", "actor": "CANARY_TEST_robot", "as_agent": True},
+                {"op": "move", "id": "T-002", "status": "termine", "actor": "agent:CANARY_TEST_bot", "force_done": True},
+                {"op": "sync-md", "actor": "agent:CANARY_TEST_bot"},
+            ):
+                status, body = self._post_json(port, "/api/action", payload, hdrs)
+                self.assertEqual(status, 400, f"{payload} -> {status} {body}")
+                self.assertIn("Garde-fou Agent/Humain", body.get("error", ""))
+            self.assertEqual(self._status("T-002"), "en_revue")
+            self.assertEqual(self._status("T-003"), "en_revue")
+
+            # Témoins humains : la validation humaine reste possible (sync-md d'abord, KANBAN.md ayant été édité)
+            status, body = self._post_json(port, "/api/action", {"op": "sync-md", "actor": "humain"}, hdrs)
+            self.assertEqual(status, 200, body)
+            status, body = self._post_json(port, "/api/action",
+                                           {"op": "save_card", "id": "T-002", "status": "termine", "actor": "humain"}, hdrs)
+            self.assertEqual(status, 200, body)
+        finally:
+            stop()
+        self.assertEqual(self._status("T-002"), "termine")
+        self.assertEqual(self._status("T-003"), "termine")
+        res = run_cli(self.board_dir, ["move", "T-004", "termine"])
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self._status("T-004"), "termine")
+
+    def test_23_serve_rejects_foreign_host_and_origin_and_sets_security_headers(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init", "--title", "CANARY_TEST_Host"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_Secret_Board"]).returncode, 0)
+        port, token, stop = self._start_server()
+        try:
+            # DNS rebinding : Host étranger refusé, sans fuite du jeton ni des cartes
+            for path in ("/", "/kanban.html", "/api/state", "/attachments/T-001/x.txt", "/inconnu"):
+                for host in ("attacker.example.test", f"attacker.example.test:{port}", "127.0.0.1:1", f"127.0.0.1.example.test:{port}"):
+                    status, _, data = self._raw_request(port, "GET", path, {"Host": host})
+                    self.assertEqual(status, 403, f"GET {path} Host={host} -> {status}")
+                    self.assertNotIn(token.encode(), data)
+                    self.assertNotIn(b"CANARY_TEST_Secret_Board", data)
+            status, _, _ = self._raw_request(port, "GET", "/api/state", {})
+            self.assertEqual(status, 403, "Host absent doit être refusé")
+
+            # Hôtes légitimes
+            for host in (f"127.0.0.1:{port}", f"localhost:{port}", f"LOCALHOST:{port}"):
+                status, _, data = self._raw_request(port, "GET", "/api/state", {"Host": host})
+                self.assertEqual(status, 200, host)
+
+            # POST : Origin (ou Sec-Fetch-Site: same-origin) obligatoire, Host strict
+            add = {"op": "add", "title": "CANARY_TEST_Post"}
+            refused = [
+                {"X-Kanban-Token": token},
+                {"X-Kanban-Token": token, "Origin": "null"},
+                {"X-Kanban-Token": token, "Origin": f"http://attacker.example.test:{port}"},
+                {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port + 1}"},
+                {"X-Kanban-Token": token, "Origin": f"https://127.0.0.1:{port}"},
+                {"X-Kanban-Token": token, "Sec-Fetch-Site": "cross-site"},
+                {"X-Kanban-Token": token, "Sec-Fetch-Site": "same-site"},
+                {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}", "Host": "attacker.example.test"},
+            ]
+            for hdrs in refused:
+                status, body = self._post_json(port, "/api/action", add, hdrs)
+                self.assertEqual(status, 403, f"{hdrs} -> {status} {body}")
+                status, body = self._post_json(port, "/api/upload",
+                                               {"id": "T-001", "filename": "a.txt", "content_base64": "eA=="}, hdrs)
+                self.assertEqual(status, 403, f"upload {hdrs} -> {status}")
+            self.assertEqual(len(list((self.board_dir / "tasks").glob("*.md"))), 1)
+
+            for hdrs in (
+                {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"},
+                {"X-Kanban-Token": token, "Origin": f"http://localhost:{port}", "Host": f"localhost:{port}"},
+                {"X-Kanban-Token": token, "Sec-Fetch-Site": "same-origin"},
+            ):
+                status, body = self._post_json(port, "/api/action", add, hdrs)
+                self.assertEqual(status, 200, f"{hdrs} -> {status} {body}")
+
+            # En-têtes de sécurité sur toutes les réponses (HTML, JSON, erreurs)
+            expected = {
+                "x-frame-options": "DENY",
+                "x-content-type-options": "nosniff",
+                "referrer-policy": "no-referrer",
+            }
+            for path in ("/kanban.html", "/api/state", "/inconnu"):
+                status, hdrs, data = self._raw_request(port, "GET", path, {"Host": f"127.0.0.1:{port}"})
+                for key, val in expected.items():
+                    self.assertEqual(hdrs.get(key), val, f"{path} {key}")
+                csp = hdrs.get("content-security-policy", "")
+                self.assertIn("default-src 'self'", csp, path)
+                self.assertIn("frame-ancestors 'none'", csp, path)
+                self.assertNotIn("unsafe-eval", csp, path)
+            status, hdrs, _ = self._raw_request(port, "GET", "/api/state", {"Host": "attacker.example.test"})
+            self.assertEqual(hdrs.get("x-frame-options"), "DENY")
+
+            # La page interactive doit rester fonctionnelle sous la CSP : chaque <script> porte le nonce annoncé
+            status, hdrs, data = self._raw_request(port, "GET", "/kanban.html", {"Host": f"127.0.0.1:{port}"})
+            page = data.decode("utf-8")
+            nonce_m = re.search(r"script-src[^;]*'nonce-([A-Za-z0-9_-]+)'", hdrs.get("content-security-policy", ""))
+            self.assertIsNotNone(nonce_m, "script-src doit autoriser les scripts de la page par nonce")
+            from html.parser import HTMLParser
+
+            class _ScriptNonceParser(HTMLParser):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.nonces: list[str | None] = []
+
+                def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                    if tag.lower() == "script":
+                        self.nonces.append(dict(attrs).get("nonce"))
+
+            parser = _ScriptNonceParser()
+            parser.feed(page)
+            self.assertGreaterEqual(len(parser.nonces), 2)
+            for script_nonce in parser.nonces:
+                self.assertEqual(script_nonce, nonce_m.group(1))
+            status2, hdrs2, _ = self._raw_request(port, "GET", "/kanban.html", {"Host": f"127.0.0.1:{port}"})
+            self.assertNotEqual(hdrs.get("content-security-policy"), hdrs2.get("content-security-policy"),
+                                "le nonce doit changer à chaque réponse")
+            # Le fichier statique sur disque ne porte ni nonce ni jeton
+            disk_html = (self.board_dir / "kanban.html").read_text(encoding="utf-8")
+            self.assertNotIn("nonce=", disk_html)
+        finally:
+            stop()
+
+    def test_24_attach_refuses_private_files_cli_and_upload(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init", "--title", "CANARY_TEST_Private"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_Att"]).returncode, 0)
+        src_dir = Path(self._tmp.name) / "sources"
+        (src_dir / ".ssh").mkdir(parents=True)
+        (src_dir / ".aws").mkdir(parents=True)
+        private_sources = [
+            src_dir / "credentials.json",
+            src_dir / "service-account-CANARY_TEST.json",
+            src_dir / "secrets.json",
+            src_dir / "secrets.toml.txt",
+            src_dir / "client_secret_CANARY_TEST.json",
+            src_dir / ".ssh" / "notes.txt",
+            src_dir / ".aws" / "config.txt",
+        ]
+        for path in private_sources:
+            path.write_text("CANARY_TEST_valeur_fictive\n", encoding="utf-8")
+            res = run_cli(self.board_dir, ["attach", "T-001", "--file", str(path)])
+            self.assertNotEqual(res.returncode, 0, f"{path.name} accepté : {res.stdout}")
+            self.assertIn("privé", (res.stdout + res.stderr).lower())
+        att_dir = self.board_dir / "attachments" / "T-001"
+        self.assertFalse(att_dir.exists() and any(att_dir.iterdir()))
+        self.assertEqual(json.loads(run_cli(self.board_dir, ["show", "T-001"]).stdout)["attachments"], [])
+
+        ok_file = src_dir / "CANARY_TEST_compte-rendu.json"
+        ok_file.write_text('{"note": "CANARY_TEST_"}\n', encoding="utf-8")
+        res = run_cli(self.board_dir, ["attach", "T-001", "--file", str(ok_file)])
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+        port, token, stop = self._start_server()
+        try:
+            hdrs = {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"}
+            b64 = base64.b64encode(b"CANARY_TEST_").decode("ascii")
+            for fname in ("credentials.json", "secrets.json", "service-account-x.json"):
+                status, body = self._post_json(port, "/api/upload",
+                                               {"id": "T-001", "filename": fname, "content_base64": b64}, hdrs)
+                self.assertEqual(status, 400, f"{fname} -> {status} {body}")
+        finally:
+            stop()
+        self.assertEqual(sorted(p.name for p in att_dir.iterdir() if not p.name.startswith(".")),
+                         ["canary-test-compte-rendu.json"])
+
+    def test_25_attachments_get_rejects_raw_traversal_and_symlinks(self) -> None:
+        self.assertEqual(run_cli(self.board_dir, ["init", "--title", "CANARY_TEST_Trav"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_A"]).returncode, 0)
+        self.assertEqual(run_cli(self.board_dir, ["add", "--title", "CANARY_TEST_B"]).returncode, 0)
+        outside = Path(self._tmp.name) / "outside"
+        outside.mkdir()
+        (outside / "fuite.txt").write_bytes(b"CANARY_TEST_hors_tableau\n")
+        att_root = self.board_dir / "attachments"
+        (att_root / "T-001").mkdir(parents=True)
+        (att_root / "T-001" / "ok.txt").write_bytes(b"CANARY_TEST_ok\n")
+        symlinks_ok = True
+        try:
+            os.symlink(outside / "fuite.txt", att_root / "T-001" / "lien.txt")
+            os.symlink(outside, att_root / "T-002", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            symlinks_ok = False
+
+        port, token, stop = self._start_server()
+        try:
+            host = {"Host": f"127.0.0.1:{port}"}
+            status, _, data = self._raw_request(port, "GET", "/attachments/T-001/ok.txt", host)
+            self.assertEqual(status, 200)
+            self.assertEqual(data, b"CANARY_TEST_ok\n")
+            for raw_path in (
+                "/attachments/T-001/../kanban.json",
+                "/attachments/T-001/../../kanban.json",
+                "/attachments/../kanban.json",
+                "/attachments/T-001/./ok.txt",
+                "/attachments/T-001/%2e%2e/kanban.json",
+            ):
+                status, _, data = self._raw_request(port, "GET", raw_path, host)
+                self.assertIn(status, (400, 403, 404), f"{raw_path} -> {status}")
+                self.assertNotIn(b'"next_id"', data)
+            if symlinks_ok:
+                for raw_path in ("/attachments/T-001/lien.txt", "/attachments/T-002/fuite.txt"):
+                    status, _, data = self._raw_request(port, "GET", raw_path, host)
+                    self.assertIn(status, (403, 404), f"{raw_path} -> {status}")
+                    self.assertNotIn(b"CANARY_TEST_hors_tableau", data)
+                # Upload vers un dossier de carte symbolique : aucune écriture hors du tableau
+                hdrs = {"X-Kanban-Token": token, "Origin": f"http://127.0.0.1:{port}"}
+                b64 = base64.b64encode(b"CANARY_TEST_depot").decode("ascii")
+                status, body = self._post_json(port, "/api/upload",
+                                               {"id": "T-002", "filename": "depot.txt", "content_base64": b64}, hdrs)
+                self.assertEqual(status, 400, body)
+                self.assertEqual(sorted(p.name for p in outside.iterdir()), ["fuite.txt"])
+        finally:
+            stop()
 
 
 if __name__ == "__main__":

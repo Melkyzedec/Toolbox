@@ -17,7 +17,7 @@ flowchart TB
 
     subgraph Lock["Verrouillage & Validation Déterministe"]
         FLOCK["Verrou exclusif .kanban.lock\n(msvcrt / fcntl, écritures atomiques)"]
-        GATE["Garde-fous Métier\n• Agent -> en_revue seul (--as-agent)\n• Humain -> valide termine\n• Port fallback si 8765 occupé\n• Jeton CSRF éphémère en mémoire\n• Anti-traversal pièces jointes <= 5 Mo"]
+        GATE["Garde-fous Métier\n• Agent -> en_revue seul (add, move, save_card, sync-md, batch)\n• Humain -> valide termine (aucun contournement)\n• Port fallback si 8765 occupé\n• Jeton CSRF éphémère + Host/Origin locaux stricts\n• En-têtes CSP (nonce), X-Frame-Options, nosniff\n• Anti-traversal/symlink pièces jointes <= 5 Mo, fichiers privés refusés"]
     end
 
     subgraph Board["Dossier du Tableau (<dossier-tableau>/)"]
