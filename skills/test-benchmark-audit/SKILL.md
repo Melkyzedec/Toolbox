@@ -12,7 +12,17 @@ description: >
 
 # Audit Hostile, Correction Guidée & Réception Globale (`0 USD`)
 
-Cette skill fonctionne en **trois phases distinctes** : **Mode 1 (Audit & Brownfield Gate)** par défaut, **Mode 2 (Correction par tranches TDD)** sur demande explicite, et **Mode 3 (Contre-vérification & Re-test global)** pour prouver que les correctifs tiennent réellement ensemble.
+Cette skill fonctionne en **trois phases distinctes** — complétées d'un **Mode 0 optionnel (Audit d'architecture soustractif à froid)** sur demande explicite : **Mode 1 (Audit & Brownfield Gate)** par défaut, **Mode 2 (Correction par tranches TDD)** sur demande explicite, et **Mode 3 (Contre-vérification & Re-test global)** pour prouver que les correctifs tiennent réellement ensemble.
+
+---
+
+## Mode 0 — Audit d'Architecture Soustractif à Froid (`optionnel`, Lecture Seule, `0 USD`)
+
+À activer sur demande explicite lorsqu'un projet existant accumule de la complexité ou des doublons avant d'investir dans une v1.0 :
+1. **Promesses vs Code réel (`fichier:ligne`) :** confronte `README`/specs au code réellement exécuté et aux chiffres existants (repère code mort, modules non importés, doublons, garde-fous fail-open).
+2. **Tableau de tri sans complaisance :** classe chaque sous-système en **Garder tel quel / Durcir-Simplifier / Fusionner / Supprimer** (avec justification factuelle).
+3. **Carte exacte des imports avant retrait :** liste tout fichier de production, de test ou de benchmark qui importe un module candidat à la suppression afin de fixer un ordre de retrait sans casse.
+4. **Plan d'exécution en lots séquencés (`A / B / C`) :** urgences sécurité (TDD `Red -> Green`), préparation de mesure à `0 USD`, puis simplification progressive (avec `.gitattributes` LF et régénération de manifeste si applicable).
 
 ---
 
@@ -33,7 +43,7 @@ Tu agis comme un **auditeur externe sceptique** (fiabilité logicielle, *mutatio
 
 ### 2. Procédure d'Audit (4 étapes)
 - **Étape A — Cartographie & Hygiène DLP/SAST (`0 USD`) :** scanne le projet en excluant dès le départ `node_modules/`, `.git/`, `.tmp/`, `dist/`, `build/`, `.next/`, `out/`, caches binaires, archives volumineuses et fichiers protégés par `Safety-Net`. Repère tests (`tests/`, `*recette*`, `*.test.*`, `*.spec.*`), benchmarks/oracles (`evals/`, `*bench*`, `scenarios*`), rapports/JSON (`SYNTHESE*`, `RAPPORT*`, `README*`) et code testé. Vérifie immédiatement que les fixtures, snapshots JSON et rapports n'embarquent aucune vraie PII, secret ou chemin machine personnel (exiger la convention `CANARY_TEST_` / `@example.test`). Si le volume dépasse ~`1 800` lignes, scinde en **2 passes** (Passe 1 : tests/isolation/mocks/DLP/SAST ; Passe 2 : benchmarks/oracles/FinOps/docs vs JSON).
-- **Étape B — Grille d'attaque :** charge et applique les **7 axes durcis** dans [grille-audit-hostile.md](./references/grille-audit-hostile.md) (incluant la vérification de la trace TDD `Red -> Green`, des canaris `CANARY_TEST_` et du scan SAST / `Skill-Scanner`).
+- **Étape B — Grille d'attaque :** charge et applique les **7 axes durcis** dans [grille-audit-hostile.md](./references/grille-audit-hostile.md) (incluant la trace TDD `Red -> Green`, les canaris `CANARY_TEST_`, le scan SAST / `Skill-Scanner` et la **Grille Anti-Biais Benchmark LLM** en 5 exigences).
 - **Étape C — Priorisation honnête :** classe chaque faille (`Critique`, `Haute`, `Moyenne`, `Basse`) selon son impact réel.
 - **Étape D — Écriture & contrôle :** écris le `.md` dans `<dossier-concerné>` selon le gabarit de [grille-audit-hostile.md](./references/grille-audit-hostile.md) et vérifie sur disque qu'il existe et est non vide.
 

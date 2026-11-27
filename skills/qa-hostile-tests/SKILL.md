@@ -78,6 +78,7 @@ Termine toujours par ce bilan structuré, directement exploitable même par un n
 - Jamais de BOM ni d'Unicode invisible littéral dans un test : génère-les (`chr(0xFEFF)`, `"\u200b"`).
 - Jamais de variable ou fixture écrite sur disque nommée `secret`, `key` ou `passwd` : préfère des noms neutres (`canary_value`, `sample_token`).
 - Pour inspecter du HTML, utilise `html.parser.HTMLParser` plutôt qu'une regex sur `<script>` (signalée par CodeQL).
+- **Honnêteté OS & concurrence :** tout test Windows-only (DPAPI, PowerShell, `win32`, jonctions) exécute un **`SKIP` explicite** hors Windows (jamais un `PASS` silencieux) ; un test de concurrence doit prouver un **chevauchement réel horodaté** des processus (pas un simple délai court qui peut passer séquentiellement).
 - Données fictives uniquement : `CANARY_TEST_` / `@example.test`.
 
 ---

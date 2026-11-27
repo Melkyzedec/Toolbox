@@ -44,6 +44,12 @@ Si le projet contient un comparatif (`bare` vs `plugin`, modèle X vs Y, `AVEC` 
   - Les noms de dossiers temporaires aléatoires changent-ils entre répétitions en cassant le préfixe stable (et donc le *prompt cache* serveur) dans un mode et pas un autre ?
 - **Effet d'ordre & variance du cache serveur :** noter quand l'écart `$` / `inputUncached` tient au taux de `cached_input_tokens` (hasard serveur ou échauffement de préfixe par ordre d'exécution) plutôt qu'au code mesuré.
 - **Sur-ajustement (*overfitting*) des scénarios :** les commandes ou textes de benchmark sont-ils calibrés exprès sur les mots-clés exacts / regex du filtre testé alors qu'une formulation voisine naturelle passerait à travers ?
+- **Grille Anti-Biais Benchmark LLM (5 exigences obligatoires avant toute conclusion) :**
+  1. **Zéro réponse soufflée :** ni dans le prompt, ni dans un fichier résiduel de session précédente dans le dépôt, ni dans le message d'erreur d'un outil du banc.
+  2. **Un bras isolé par brique évaluée :** séparer systématiquement témoin nu (`N`), brique A seule, brique B seule et combinaison (`A+B`) pour attribuer honnêtement les gains.
+  3. **Ordre équilibré (carré latin) :** alterner et équilibrer la position de chaque bras entre répétitions afin de neutraliser la dérive du cache serveur.
+  4. **Zéro biais du survivant :** un essai incomplet ou planté compte comme un **échec** au coût observé ; interdiction de l'exclure silencieusement des moyennes ou paires.
+  5. **Critère Go/No-Go fixé avant le run :** seuils chiffrés de réussite, d'effet utile et de surcoût maximal posés *avant* toute exécution payante.
 
 ---
 
