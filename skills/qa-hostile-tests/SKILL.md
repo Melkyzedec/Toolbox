@@ -22,7 +22,7 @@ Cette skill s'utilise selon deux modes d'entrée :
 ## 1. Règles non négociables
 1. **Ne modifie JAMAIS le code de production :** tu écris et exécutes uniquement des tests (en dossier temporaire isolé nettoyé en `finally`). Si un test révèle un vrai bug dans le programme, **tu gardes le test qui échoue tel quel** — interdiction de contourner le bug en édulcorant le test ou en retouchant le moteur.
 2. **Bouclier `Safety-Net` (`0 token`) & `Zero Untrusted External Code` :**
-   - **Interdiction de lire/grepper les secrets réels (consigne à doubler d'un verrou d'outil, par exemple un hook `PreToolUse` qui refuse ces chemins) :** n'ouvre jamais `.env*` (hors `.env.example`), `*.pem`, `*.key`, `*vault*.sqlite`, `00-BRUT-CLIENT/`, `.ssh/`, ni des exports clients réels.
+   - **Interdiction de lire/grepper les secrets réels (consigne à doubler d'un verrou d'outil, par exemple un hook `PreToolUse` qui refuse ces chemins) :** n'ouvre jamais `.env*` (hors `.env.example`), `*.pem`, `*.key`, `*vault*.sqlite`, `<dossier-données-clients>/`, `.ssh/`, ni des exports clients réels.
    - **Interdiction absolue du code externe non audité :** ne copie-colle jamais de snippets externes non vérifiés et n'exécute jamais d'installateur ou de script distant.
 3. **Zéro appel LLM / API payant (`0 USD`) & Données canaris fictives (`CANARY_TEST_`) :** aucun appel API externe payant ni lancement d'agent live. Utilise exclusivement des exécutions locales, des sous-processus isolés (`%USERPROFILE%`, `%CODEX_HOME%` et données réelles intouchées) et des entrées synthétiques marquées `CANARY_TEST_` / `@example.test`.
 4. **Zéro mock menteur sur le parcours principal :** privilégie le **vrai point d'entrée** (vrai CLI/script/serveur local/base SQLite ou fichiers réels en temp) plutôt que des stubs en mémoire qui recopient les raccourcis du code testé.
@@ -54,7 +54,7 @@ Charge et applique les familles pertinentes dans [matrice-tests-hostiles.md](./r
 
 ### Étape 4 — Exécuter l'ensemble & passer la porte déterministe (`0 USD`)
 - Exécute la nouvelle batterie (plus les tests existants s'il y en a).
-- Si le script de contrôle déterministe `check-release.ps1` est disponible dans le projet ou la boîte à outils, exécute-le en mode rapide (`-Fast`) sur le dossier cible pour vérifier l'absence de secret, de chemin machine privé, de PII non marquée `CANARY_TEST_` et de pattern SAST dangereux.
+- Si le script de contrôle déterministe `check-release.ps1` est disponible (il est fourni par la skill `github-open-source-release`, à installer séparément), exécute-le en mode rapide (`-Fast`) avec `pwsh` (PowerShell 7+) s'il est installé, sinon `powershell` (Windows PowerShell 5.1) sur le dossier cible pour vérifier l'absence de secret, de chemin machine privé, de PII et de pattern SAST dangereux. Le marqueur `CANARY_TEST_` n'exempte que la valeur qui le porte, jamais une ligne. Sans ce script, indique dans la restitution que la porte n'a pas été exécutée.
 - Distingue clairement dans tes vérifications ce qui vient d'une **vraie faille du code testé** (bug confirmé) d'un simple défaut de fixture dans le test (à corriger immédiatement côté test uniquement).
 
 ### Étape 5 — Restitution obligatoire en 4 points (français clair)

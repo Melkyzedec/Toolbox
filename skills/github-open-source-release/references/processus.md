@@ -19,8 +19,8 @@ flowchart TB
     end
 
     subgraph P3["3. Porte Deterministe (check-release.ps1)"]
-        FAST["Mode -Fast (< 1s) en boucle dev / pre-commit\n(gitHistory: skipped-fast)"]
-        FULL["Mode complet avec -GitRoot (obligatoire avant publication)\nInspecte arbre, .zip (prof. 3) + historique Git complet\n-> status: passed & SHA-256 exact"]
+        FAST["Mode -Fast en boucle dev / pre-commit\n(mode: fast, gitHistory: skipped-fast)"]
+        FULL["Mode complet avec -GitRoot (obligatoire avant publication)\nInspecte arbre, .zip (prof. 3) + historique Git complet\n-> status: passed, mode: full & SHA-256 exact\n(sans -GitRoot : mode partial, insuffisant)"]
     end
 
     subgraph P4["4. Accord Explicite & Publication Sans Bypass"]
@@ -42,10 +42,10 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    E1["1. artifact-layout\n• 0 symlink/jonction sortant\n• 0 traversal ../ ni nom reserve Windows\n• 0 fichier prive (.git, .env, .sqlite, .key)\n• 0 bombe ou doublon ZIP (prof. <= 3)"]
-    E2["2. artifact-dlp\n• 0 chemin prive Windows/Unix\n• 0 dossier cache bare hors home\n• 0 PII (IBAN, NIR, e-mail perso)\n• Exemption fixtures CANARY_TEST_"]
-    E3["3. artifact-sast (Skill-Scanner)\n• 0 caractere Unicode invisible / Bidi\n• 0 execution distante ou obfusquee\n  (curl|bash, iex, eval/atob)"]
-    E4["4. Secrets & git-identity\n• Gitleaks --redact=100 (arbre + ZIP)\n• Hors -Fast : historique non shallow,\n  100 % commits en @users.noreply.github.com,\n  Gitleaks --all --full-history"]
+    E1["1. artifact-layout\n• 0 symlink/jonction sortant\n• 0 traversal ../ ni nom reserve Windows\n• 0 fichier prive (.git, .env, .sqlite, .key)\n• 0 bombe, lien ou doublon ZIP (dossier ou .zip, prof. <= 3)"]
+    E2["2. artifact-dlp\n• 0 chemin prive Windows/Unix\n• 0 dossier cache bare hors home\n• 0 PII (IBAN, NIR, e-mail perso)\n• Exemption par valeur CANARY_TEST_ seulement\n  (jamais une ligne entiere)"]
+    E3["3. artifact-sast (Skill-Scanner)\n• 0 caractere Unicode invisible / Bidi\n• 0 execution distante ou obfusquee\n  (curl|bash, iex, eval/atob)\n• 0 exemption hors tests/fixtures/"]
+    E4["4. Secrets & git-identity\n• Gitleaks --redact=100 (arbre + ZIP)\n• Hors -Fast : historique non shallow,\n  0 adresse perso (noreply ou domaines reserves),\n  Gitleaks --all --full-history"]
 
     E1 --> E2 --> E3 --> E4
 ```

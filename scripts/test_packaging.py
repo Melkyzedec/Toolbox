@@ -356,5 +356,132 @@ class TestPackager(unittest.TestCase):
             self.assertIn("BOM", res_bad2.stderr + res_bad2.stdout)
 
 
+class TestPackagerHardening(unittest.TestCase):
+    """Contre-audit 26/11/2026, M-03 : fichiers privés, liens symboliques, frontmatter et dossier de sortie."""
+
+    VALID_MD = "---\nname: {name}\ndescription: CANARY_TEST_ skill de test.\n---\n\nCorps.\n"
+
+    def _run(self, skills_root: Path, out_dir: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-B", str(PACKAGER), "--skills-dir", str(skills_root), "--out", str(out_dir)],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def _make_skill(self, root: Path, name: str = "sample-skill", md: str | None = None) -> Path:
+        skill = root / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(md if md is not None else self.VALID_MD.format(name=name), encoding="utf-8")
+        return skill
+
+    def test_private_files_block_packaging(self) -> None:
+        private_names = [
+            ".env", ".env.local", ".env.production", "cle.pem", "prive.key", "base.sqlite", "base.sqlite3",
+            "app.db", "base.sqlite-wal", "cert.pfx", "cert.p12", "store.jks", "app.keystore", "id_rsa",
+            "id_ed25519", "credentials.json", "service-account-CANARY_TEST.json", "secrets.yaml",
+            ".git-credentials", ".netrc", ".pgpass", ".ssh/config", ".aws/credentials", "references/.gnupg/x.txt",
+            "coffre.kdbx", "client.ovpn", "terraform.tfstate", "infra/prod.tfstate.backup", ".htpasswd",
+            ".kube/config", ".docker/config.json",
+        ]
+        for rel in private_names:
+            with self.subTest(rel=rel), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                skill = self._make_skill(root)
+                target = skill / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("CANARY_TEST_valeur_fictive\n", encoding="utf-8")
+                out = root / "out"
+                res = self._run(root / "skills", out)
+                self.assertNotEqual(res.returncode, 0, f"{rel} empaqueté : {res.stdout}")
+                self.assertIn("Private file", res.stderr)
+                self.assertNotIn("CANARY_TEST_valeur_fictive", res.stderr + res.stdout)
+                self.assertFalse(list(out.glob("*.zip")) if out.exists() else [], "aucune archive partielle")
+
+    def test_env_example_and_public_lookalikes_still_packaged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = self._make_skill(root)
+            for rel in (".env.example", "references/credentials-guide.md", "references/keys.md", "id_rsa.pub"):
+                (skill / rel).parent.mkdir(parents=True, exist_ok=True)
+                (skill / rel).write_text("CANARY_TEST_\n", encoding="utf-8")
+            res = self._run(root / "skills", root / "out")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            with zipfile.ZipFile(root / "out" / "sample-skill-claude-desktop.zip") as zf:
+                self.assertEqual(
+                    sorted(zf.namelist()),
+                    sorted(f"sample-skill/{n}" for n in (
+                        ".env.example", "SKILL.md", "id_rsa.pub", "references/credentials-guide.md", "references/keys.md",
+                    )),
+                )
+
+    def test_symlinked_skill_dir_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside" / "linked"
+            outside.mkdir(parents=True)
+            (outside / "SKILL.md").write_text(self.VALID_MD.format(name="linked"), encoding="utf-8")
+            (outside / "CANARY_TEST_hors_depot.txt").write_text("CANARY_TEST_\n", encoding="utf-8")
+            (root / "skills").mkdir()
+            try:
+                (root / "skills" / "linked").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("liens symboliques indisponibles sur ce système")
+            out = root / "out"
+            res = self._run(root / "skills", out)
+            self.assertNotEqual(res.returncode, 0, res.stdout)
+            self.assertIn("Symlink", res.stderr)
+            self.assertFalse(out.exists() and list(out.glob("*.zip")))
+
+    def test_frontmatter_must_be_a_closed_leading_block(self) -> None:
+        bad_docs = {
+            "name hors frontmatter": "---\ntitle: x\n---\n\nname: sample-skill\ndescription: hors bloc\n",
+            "bloc non fermé": "---\nname: sample-skill\ndescription: jamais fermé\n",
+            "pas en tête": "Intro\n---\nname: sample-skill\ndescription: x\n---\n",
+            "nom différent": "---\nname: autre-skill\ndescription: x\n---\n",
+            "nom préfixé": "---\nname: sample-skill-evil\ndescription: x\n---\n",
+            "description vide": "---\nname: sample-skill\ndescription:\n---\n",
+            "description absente": "---\nname: sample-skill\n---\n",
+        }
+        for label, md in bad_docs.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self._make_skill(root, md=md)
+                res = self._run(root / "skills", root / "out")
+                self.assertNotEqual(res.returncode, 0, f"{label} accepté")
+                self.assertIn("frontmatter", res.stderr.lower())
+        # Témoins : CRLF, description multi-ligne YAML (>) et guillemets acceptés
+        for label, md in {
+            "crlf": "---\r\nname: sample-skill\r\ndescription: ok\r\n---\r\n",
+            "plié": "---\nname: sample-skill\ndescription: >\n  Texte plié\n  sur deux lignes.\n---\n",
+            "guillemets": '---\nname: sample-skill\ndescription: "ok : avec deux-points"\n---\n',
+        }.items():
+            with self.subTest(temoin=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self._make_skill(root, md=md)
+                res = self._run(root / "skills", root / "out")
+                self.assertEqual(res.returncode, 0, f"{label} : {res.stderr}")
+
+    def test_out_dir_inside_skills_dir_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill = self._make_skill(root)
+            for out in (skill / "dist", root / "skills", root / "skills" / "dist"):
+                with self.subTest(out=str(out.relative_to(root))):
+                    res = self._run(root / "skills", out)
+                    self.assertNotEqual(res.returncode, 0, res.stdout)
+                    self.assertIn("Output directory", res.stderr)
+                    self.assertFalse((skill / "dist").exists())
+                    self.assertFalse((root / "skills" / "dist").exists())
+            # Témoin : un dossier de sortie voisin reste accepté, deux fois de suite à l'identique
+            res1 = self._run(root / "skills", root / "dist")
+            res2 = self._run(root / "skills", root / "dist")
+            self.assertEqual(res1.returncode, 0, res1.stderr)
+            self.assertEqual(res2.returncode, 0, res2.stderr)
+            with zipfile.ZipFile(root / "dist" / "sample-skill-claude-desktop.zip") as zf:
+                self.assertEqual(zf.namelist(), ["sample-skill/SKILL.md"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ $MaxArchiveDepth = 3
 $MaxArchiveEntries = 10000
 $MaxArchiveUncompressedBytes = 524288000 # 500 MiB
 $MaxScannableTextBytes = 10485760 # 10 MiB
+$MaxBufferedEntryBytes = 104857600 # 100 MiB: largest archive entry held in memory (nested archive or text)
 
 # Dynamic pattern construction so self-scans of check-release.ps1 never trigger false positives.
 $PrivateWinCursorRegex = '(?i)\b[A-Z]:' + '[\\/]+' + 'CUR' + 'SOR[\\/]+'
@@ -95,7 +96,8 @@ function Assert-PublicPath {
         throw 'unsafe-entry'
     }
     if ($entry -match '(?i)(^|/)(\.git|\.memento|\.local|\.gitleaksignore|\.ssh|\.aws|\.gnupg)(/|$)' -or
-        $entry -match '(?i)(^|/)\.env($|\.(?!example$))|\.(sqlite3?|db|pem|pfx|key|p12|keystore|jks)(-(wal|shm|journal))?$' -or
+        $entry -match '(?i)(^|/)\.env($|\.(?!example$))|\.(sqlite3?|db|pem|pfx|key|p12|keystore|jks|kdbx|ovpn)(-(wal|shm|journal))?$' -or
+        $entry -match '(?i)\.tfstate(\.backup)?$|(^|/)(\.docker/config\.json|\.kube/config|\.htpasswd)$' -or
         $entry -match '(?i)(^|/)(id_(rsa|ed25519|ecdsa|dsa)|credentials\.json|service-account[^/]*\.json|\.git-credentials|\.netrc|\.pgpass|secrets\.(ya?ml|json|toml))$') {
         throw 'private-entry'
     }
@@ -152,7 +154,7 @@ function Assert-SafeEmailsInLine {
     foreach ($m in [regex]::Matches($Line, $EmailExtractRegex)) {
         $localPart = $m.Groups[1].Value
         $domainPart = $m.Groups[2].Value
-        if ($localPart -imatch '^canary_test_') { continue }
+        # A CANARY_TEST_ local part does not make a real mailbox fictitious: only reserved domains pass.
         if ($localPart -ieq 'noreply' -and $domainPart -ieq 'github.com') { continue }
         if ($domainPart -notmatch $AllowedEmailDomainRegex) {
             throw $ErrorReason
@@ -180,17 +182,16 @@ function Invoke-DlpCheckOnText {
 
     foreach ($line in ($Text -split "\r?\n")) {
         if (!$line) { continue }
-        # A CANARY_TEST_ line only exempts the values that carry the marker themselves (a path such as
-        # C:\Users\CANARY_TEST_user), plus fake IBAN/NIR numbers that cannot carry it. E-mail addresses
-        # are always checked: only canary_test_ local parts and reserved test domains are allowed.
-        $isCanaryLine = $line -imatch 'CANARY_TEST_'
+        # The CANARY_TEST_ marker never exempts a whole line. Only a matched value that carries the marker
+        # itself (a path such as C:\Users\CANARY_TEST_user) is exempted. IBAN, NIR and phone numbers cannot
+        # carry it: test fixtures must build such values at run time instead of storing them.
         if ($line -cmatch $SecretShapeRegex) { throw 'secret-pattern' }
         foreach ($pathRegex in @($PrivateWinCursorRegex, $PrivateWinUsersRegex, $PrivateUnixUsersRegex, $PrivateInternalDirRegex, $PrivateWinPersonalDirRegex, $PrivateUncShareRegex)) {
             foreach ($m in [regex]::Matches($line, $pathRegex)) {
-                if (!$isCanaryLine -or $m.Value -inotmatch 'CANARY_TEST_') { throw 'dlp-private-path' }
+                if ($m.Value -inotmatch 'CANARY_TEST_') { throw 'dlp-private-path' }
             }
         }
-        if (!$isCanaryLine -and ($line -match $IbanFrRegex -or $line -match $NirFrRegex -or $line -match $PhoneFrRegex)) {
+        if ($line -match $IbanFrRegex -or $line -match $NirFrRegex -or $line -match $PhoneFrRegex) {
             throw 'dlp-pii'
         }
         Assert-SafeEmailsInLine -Line $line -ErrorReason 'dlp-pii'
@@ -210,8 +211,12 @@ function Invoke-SastCheckOnText {
         throw 'sast-homoglyph'
     }
     if ($RelativePath -imatch '\.(?:md|ps1|psm1|psd1|mjs|cjs|js|ts|tsx|jsx|py|sh|bash|zsh|bat|cmd|vbs|wsf|yaml|yml|toml|json)$') {
+        # Scanner fixtures may hold a dangerous pattern only under tests/fixtures/ and only on a line that
+        # carries the CANARY_TEST_ marker. Everywhere else the marker exempts nothing.
+        $isFixture = $RelativePath.Replace('\', '/') -imatch '^tests/fixtures/'
         foreach ($line in ($Text -split "\r?\n")) {
-            if (!$line -or $line -imatch 'CANARY_TEST_') { continue }
+            if (!$line) { continue }
+            if ($isFixture -and $line -imatch 'CANARY_TEST_') { continue }
             if ($line -match $SastIexRegex -or
                 $line -match $SastCurlPipeRegex -or
                 $line -match $SastEvalAtobRegex -or
@@ -227,45 +232,99 @@ function Invoke-SastCheckOnText {
     }
 }
 
-function Inspect-ZipArchiveContent {
+function New-ArchiveStats {
+    return @{ totalEntries = 0; declaredBytes = [int64]0; readBytes = [int64]0 }
+}
+
+function Test-ZipSymlinkEntry {
+    param([IO.Compression.ZipArchiveEntry]$Entry)
+    return ((($Entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000)
+}
+
+# Reads one archive entry with a hard bound. Returns the bytes when the entry fits in memory, otherwise
+# $null with its first bytes, and enforces both the declared size and the cumulative read budget.
+function Read-ZipEntryBounded {
+    param([IO.Compression.ZipArchiveEntry]$Entry, [hashtable]$Stats)
+
+    $buffer = New-Object byte[] 81920
+    $ms = [IO.MemoryStream]::new()
+    $head = New-Object byte[] 0
+    $kept = $true
+    $total = [int64]0
+    $es = $Entry.Open()
+    try {
+        while (($n = $es.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            if ($total -eq 0) { $head = $buffer[0..([Math]::Min($n, 4) - 1)] }
+            $total += $n
+            $Stats.readBytes += $n
+            # A stream longer than its declared size is a forged header (zip bomb).
+            if ($total -gt $Entry.Length) { throw 'archive-too-large' }
+            if ($Stats.readBytes -gt $MaxArchiveUncompressedBytes) { throw 'archive-too-large' }
+            if ($kept) {
+                if (($ms.Length + $n) -gt $MaxBufferedEntryBytes) {
+                    $kept = $false
+                    $ms.Dispose()
+                } else {
+                    $ms.Write($buffer, 0, $n)
+                }
+            }
+        }
+    } finally { $es.Dispose() }
+    $bytes = $null
+    if ($kept) { $bytes = $ms.ToArray(); $ms.Dispose() }
+    return @{ bytes = $bytes; head = [byte[]]$head; length = $total }
+}
+
+# Single inspection of an archive, whatever its origin (the artifact itself, a .zip or renamed archive
+# inside a folder, or an archive nested in another). Structure rules always apply; content rules depend
+# on $Mode ('layout', 'dlp' or 'sast'). Returns the number of file entries of this archive level.
+function Inspect-ZipArchive {
     param(
         [Parameter(Mandatory = $true)][IO.Compression.ZipArchive]$Archive,
         [int]$Depth,
+        [hashtable]$Stats,
         [string]$Mode
     )
 
     if ($Depth -gt $MaxArchiveDepth) { throw 'archive-too-deep' }
+    $localFiles = 0
+    $entries = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in $Archive.Entries) {
-        if (!$entry.Name) { continue }
-        # Entries of an archive found inside a folder have not been through the layout stage yet.
+        $Stats.totalEntries++
+        if ($Stats.totalEntries -gt $MaxArchiveEntries) { throw 'archive-too-large' }
         Assert-PublicPath $entry.FullName
+        $norm = $entry.FullName.Replace('\', '/').TrimEnd('/')
+        if (!$entries.Add($norm)) { throw 'duplicate-entry' }
+        if (Test-ZipSymlinkEntry $entry) { throw 'linked-entry' }
         if ($Mode -eq 'dlp') { Assert-SafeEmailsInLine -Line $entry.FullName -ErrorReason 'dlp-pii' }
+        if (!$entry.Name) { continue }
+        $localFiles++
+        $Stats.declaredBytes += [int64]$entry.Length
+        if ($Stats.declaredBytes -gt $MaxArchiveUncompressedBytes) { throw 'archive-too-large' }
         if ($entry.Length -le 0) { continue }
-        if ($entry.Length -gt $MaxArchiveUncompressedBytes) { throw 'archive-too-large' }
-        $ms = [IO.MemoryStream]::new()
-        $es = $entry.Open()
-        try { $es.CopyTo($ms) } finally { $es.Dispose() }
-        $bytes = $ms.ToArray()
+
+        $read = Read-ZipEntryBounded -Entry $entry -Stats $Stats
         # Any ZIP container (.zip, Office and OpenDocument files, renamed archives) is opened by its signature.
-        if (Test-ZipMagic $bytes) {
-            $ms.Position = 0
+        if (Test-ZipMagic $read.head) {
+            if ($null -eq $read.bytes) { throw 'archive-too-large' }
+            $nestedStream = [IO.MemoryStream]::new($read.bytes, $false)
             $nested = $null
             try {
                 try {
-                    $nested = [IO.Compression.ZipArchive]::new($ms, [IO.Compression.ZipArchiveMode]::Read, $false)
+                    $nested = [IO.Compression.ZipArchive]::new($nestedStream, [IO.Compression.ZipArchiveMode]::Read, $false)
                 } catch { throw 'unscannable-archive' }
-                Inspect-ZipArchiveContent -Archive $nested -Depth ($Depth + 1) -Mode $Mode
+                Inspect-ZipArchive -Archive $nested -Depth ($Depth + 1) -Stats $Stats -Mode $Mode | Out-Null
             } finally {
-                if ($nested) { $nested.Dispose() } else { $ms.Dispose() }
+                if ($nested) { $nested.Dispose() } else { $nestedStream.Dispose() }
             }
             continue
         }
-        $ms.Dispose()
-        if ($bytes.Length -gt $MaxScannableTextBytes) {
+        if ($Mode -eq 'layout') { continue }
+        if ($null -eq $read.bytes -or $read.length -gt $MaxScannableTextBytes) {
             if ($entry.Name -match $TextExtensionRegex) { throw 'unscanned-text-file' }
             continue
         }
-        $text = Get-ScanText -Bytes $bytes -Name $entry.Name
+        $text = Get-ScanText -Bytes $read.bytes -Name $entry.Name
         if ($null -eq $text) { continue }
         if ($Mode -eq 'dlp') {
             Invoke-DlpCheckOnText -Text $text -Name $entry.Name
@@ -273,6 +332,7 @@ function Inspect-ZipArchiveContent {
             Invoke-SastCheckOnText -Text $text -RelativePath $entry.FullName
         }
     }
+    return $localFiles
 }
 
 function Read-FileHead {
@@ -285,29 +345,34 @@ function Read-FileHead {
     } finally { $fs.Dispose() }
 }
 
-function Invoke-ArtifactContentScan {
+function Open-ZipFileOrBlock {
+    param([string]$Path)
+    try { return [IO.Compression.ZipFile]::OpenRead($Path) } catch { throw 'unscannable-archive' }
+}
+
+# One pass over the artifact for a given mode. Archives found anywhere go through Inspect-ZipArchive,
+# so a folder artifact gets the same structural checks on its archives as a .zip artifact.
+function Invoke-ArtifactScan {
     param($Item, [string]$Mode)
 
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $stats = New-ArchiveStats
     if ($Item.PSIsContainer) {
         $files = @(Get-PublicFiles $Item.FullName $Item.FullName | Sort-Object FullName)
-        Add-Type -AssemblyName System.IO.Compression
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
         foreach ($file in $files) {
             $relative = $file.FullName.Substring($Item.FullName.Length).TrimStart([char[]]'/\').Replace('\', '/')
             # A personal address in a file name is published as surely as one in the file content.
             if ($Mode -eq 'dlp') { Assert-SafeEmailsInLine -Line $relative -ErrorReason 'dlp-pii' }
             if ($file.Length -le 0) { continue }
-            # ZIP containers inside the folder (.zip, .docx, .xlsx, renamed archives) are opened and inspected too.
             if (Test-ZipMagic ([byte[]](Read-FileHead $file.FullName))) {
-                $archive = $null
+                $archive = Open-ZipFileOrBlock $file.FullName
                 try {
-                    try { $archive = [IO.Compression.ZipFile]::OpenRead($file.FullName) } catch { throw 'unscannable-archive' }
-                    Inspect-ZipArchiveContent -Archive $archive -Depth 1 -Mode $Mode
-                } finally {
-                    if ($archive) { $archive.Dispose() }
-                }
+                    Inspect-ZipArchive -Archive $archive -Depth 1 -Stats $stats -Mode $Mode | Out-Null
+                } finally { $archive.Dispose() }
                 continue
             }
+            if ($Mode -eq 'layout') { continue }
             if ($file.Length -gt $MaxScannableTextBytes) {
                 # A text file too large to inspect blocks the check instead of passing in silence.
                 if ($file.Name -match $TextExtensionRegex) { throw 'unscanned-text-file' }
@@ -321,60 +386,13 @@ function Invoke-ArtifactContentScan {
                 Invoke-SastCheckOnText -Text $text -RelativePath $relative
             }
         }
-        return
+        return 0
     }
 
-    Add-Type -AssemblyName System.IO.Compression
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $archive = [IO.Compression.ZipFile]::OpenRead($Item.FullName)
+    $archive = Open-ZipFileOrBlock $Item.FullName
     try {
-        Inspect-ZipArchiveContent -Archive $archive -Depth 1 -Mode $Mode
-    } finally {
-        $archive.Dispose()
-    }
-}
-
-function Inspect-ZipArchive {
-    param(
-        [Parameter(Mandatory = $true)][IO.Compression.ZipArchive]$Archive,
-        [int]$Depth,
-        [hashtable]$Stats
-    )
-
-    if ($Depth -gt $MaxArchiveDepth) { throw 'archive-too-deep' }
-    $localFiles = 0
-    $entries = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    foreach ($entry in $Archive.Entries) {
-        $Stats.totalEntries++
-        if ($Stats.totalEntries -gt $MaxArchiveEntries) { throw 'archive-too-large' }
-        Assert-PublicPath $entry.FullName
-        $norm = $entry.FullName.Replace('\', '/').TrimEnd('/')
-        if (!$entries.Add($norm)) { throw 'duplicate-entry' }
-        if ((($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw 'linked-entry' }
-        if ($entry.Name) {
-            $localFiles++
-            $Stats.totalUncompressedBytes += [int64]$entry.Length
-            if ($Stats.totalUncompressedBytes -gt $MaxArchiveUncompressedBytes) { throw 'archive-too-large' }
-            if ($entry.Name -imatch '\.zip$') {
-                $ms = [IO.MemoryStream]::new()
-                $es = $entry.Open()
-                try {
-                    $es.CopyTo($ms)
-                } finally {
-                    $es.Dispose()
-                }
-                $ms.Position = 0
-                $nested = $null
-                try {
-                    $nested = [IO.Compression.ZipArchive]::new($ms, [IO.Compression.ZipArchiveMode]::Read, $false)
-                    Inspect-ZipArchive -Archive $nested -Depth ($Depth + 1) -Stats $Stats | Out-Null
-                } finally {
-                    if ($nested) { $nested.Dispose() } else { $ms.Dispose() }
-                }
-            }
-        }
-    }
-    return $localFiles
+        return (Inspect-ZipArchive -Archive $archive -Depth 1 -Stats $stats -Mode $Mode)
+    } finally { $archive.Dispose() }
 }
 
 function Get-ArtifactEvidence {
@@ -399,10 +417,9 @@ function Get-ArtifactEvidence {
     if ($Item.Extension -ine '.zip') { throw 'unsupported-artifact' }
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $archive = [IO.Compression.ZipFile]::OpenRead($Item.FullName)
-    $stats = @{ totalEntries = 0; totalUncompressedBytes = [int64]0 }
+    $archive = Open-ZipFileOrBlock $Item.FullName
     try {
-        $files = Inspect-ZipArchive -Archive $archive -Depth 1 -Stats $stats
+        $files = @($archive.Entries | Where-Object { $_.Name }).Count
     } finally { $archive.Dispose() }
     if (!$files) { throw 'empty-artifact' }
     return @{ sha256 = (Get-FileHash -LiteralPath $Item.FullName).Hash; files = $files; kind = 'zip' }
@@ -443,10 +460,14 @@ function Invoke-SecretScan {
     if ($code -ne 0) { throw 'scanner-error' }
 }
 
+# Read-only git calls on a candidate repository: never let its configuration start a helper program.
+$GitSafeArgs = @('--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false')
+
 $stage = 'artifact-layout'
 try {
     $artifact = Get-Item -LiteralPath $ArtifactPath -Force
     $evidence = Get-ArtifactEvidence $artifact
+    Invoke-ArtifactScan -Item $artifact -Mode 'layout' | Out-Null
 
     $stage = 'scanner-setup'
     $scanner = Resolve-GitleaksScanner
@@ -454,10 +475,10 @@ try {
     if (!(Test-Path -LiteralPath $config -PathType Leaf)) { throw 'missing-policy' }
 
     $stage = 'artifact-dlp'
-    Invoke-ArtifactContentScan -Item $artifact -Mode 'dlp'
+    Invoke-ArtifactScan -Item $artifact -Mode 'dlp' | Out-Null
 
     $stage = 'artifact-sast'
-    Invoke-ArtifactContentScan -Item $artifact -Mode 'sast'
+    Invoke-ArtifactScan -Item $artifact -Mode 'sast' | Out-Null
 
     $stage = 'artifact-secrets'
     Invoke-SecretScan -Mode dir -Target $artifact.FullName
@@ -466,19 +487,19 @@ try {
     if ($GitRoot -and !$Fast) {
         $stage = 'git-layout'
         $repo = (Get-Item -LiteralPath $GitRoot -Force).FullName
-        $shallowRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'rev-parse', '--is-shallow-repository')
+        $shallowRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList ($GitSafeArgs + @('-C', $repo, 'rev-parse', '--is-shallow-repository'))
         if ($shallowRes.exitCode -ne 0 -or ([string]($shallowRes.output -join '')).Trim() -ne 'false') { throw 'invalid-or-shallow-git' }
-        $topRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'rev-parse', '--show-toplevel')
+        $topRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList ($GitSafeArgs + @('-C', $repo, 'rev-parse', '--show-toplevel'))
         $gitTop = ([string]($topRes.output -join '')).Trim()
         if ($topRes.exitCode -ne 0 -or !$gitTop -or [IO.Path]::GetFullPath($gitTop) -ine $repo) { throw 'invalid-git-root' }
         if (Test-Path -LiteralPath (Join-Path $repo '.gitleaksignore')) { throw 'project-scan-exceptions' }
-        $trackedRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'ls-files', '-z')
+        $trackedRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList ($GitSafeArgs + @('-C', $repo, 'ls-files', '-z'))
         if ($trackedRes.exitCode -ne 0) { throw 'git-files-unavailable' }
         foreach ($entry in (($trackedRes.output -join '') -split [char]0)) {
             if ($entry) { Assert-PublicPath $entry }
         }
         $stage = 'git-identity'
-        $gitLogRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'log', '--all', '--format=%ae%n%ce%n%B')
+        $gitLogRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList ($GitSafeArgs + @('-C', $repo, 'log', '--all', '--format=%ae%n%ce%n%B'))
         if ($gitLogRes.exitCode -ne 0) { throw 'git-history-unavailable' }
         foreach ($logLine in @($gitLogRes.output)) {
             $lineStr = [string]$logLine
@@ -490,7 +511,7 @@ try {
         # Everything ever added to the history and every commit message goes through the DLP rules:
         # a path or a personal datum removed later is still published with the history.
         $stage = 'git-dlp'
-        $historyRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList @('--no-optional-locks', '-C', $repo, 'log', '--all', '-p', '-U0', '--no-ext-diff', '--no-textconv', '--no-color', '--format=%B')
+        $historyRes = Invoke-NativeCaptureStdout -FilePath 'git' -ArgumentList ($GitSafeArgs + @('-C', $repo, 'log', '--all', '-p', '-U0', '--no-ext-diff', '--no-textconv', '--no-color', '--format=%B'))
         if ($historyRes.exitCode -ne 0) { throw 'git-history-unavailable' }
         $added = foreach ($histLine in @($historyRes.output)) {
             $h = [string]$histLine
@@ -506,7 +527,8 @@ try {
     if ((Get-ArtifactEvidence (Get-Item -LiteralPath $ArtifactPath -Force)).sha256 -ne $evidence.sha256) {
         throw 'artifact-changed'
     }
-    $scanMode = if ($Fast) { 'fast' } else { 'full' }
+    # 'full' only when the Git history was checked too; without -GitRoot the result is partial.
+    $scanMode = if ($Fast) { 'fast' } elseif ($gitHistory -eq 'checked') { 'full' } else { 'partial' }
     [pscustomobject]@{
         status = 'passed'; mode = $scanMode; fastMode = [bool]$Fast; artifact = $evidence.kind
         files = $evidence.files; sha256 = $evidence.sha256; gitHistory = $gitHistory
