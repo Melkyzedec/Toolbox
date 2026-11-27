@@ -1023,10 +1023,22 @@ class TestKanbanTasks(unittest.TestCase):
             page = data.decode("utf-8")
             nonce_m = re.search(r"script-src[^;]*'nonce-([A-Za-z0-9_-]+)'", hdrs.get("content-security-policy", ""))
             self.assertIsNotNone(nonce_m, "script-src doit autoriser les scripts de la page par nonce")
-            tags = re.findall(r"<script\b[^>]*>", page)
-            self.assertGreaterEqual(len(tags), 2)
-            for tag in tags:
-                self.assertIn(f'nonce="{nonce_m.group(1)}"', tag)
+            from html.parser import HTMLParser
+
+            class _ScriptNonceParser(HTMLParser):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.nonces: list[str | None] = []
+
+                def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+                    if tag.lower() == "script":
+                        self.nonces.append(dict(attrs).get("nonce"))
+
+            parser = _ScriptNonceParser()
+            parser.feed(page)
+            self.assertGreaterEqual(len(parser.nonces), 2)
+            for script_nonce in parser.nonces:
+                self.assertEqual(script_nonce, nonce_m.group(1))
             status2, hdrs2, _ = self._raw_request(port, "GET", "/kanban.html", {"Host": f"127.0.0.1:{port}"})
             self.assertNotEqual(hdrs.get("content-security-policy"), hdrs2.get("content-security-policy"),
                                 "le nonce doit changer à chaque réponse")
