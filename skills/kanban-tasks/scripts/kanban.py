@@ -4873,21 +4873,37 @@ def create_serve_httpd(
             except KanbanError as exc:
                 self._send_json(500, {"ok": False, "error": str(exc)})
 
+        def _drain_small_body(self) -> None:
+            # Sous Windows, fermer la socket avec un petit corps POST non lu provoque un TCP RST (WinError 10053).
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return
+            if 0 < length <= 65536:
+                try:
+                    self.rfile.read(length)
+                except OSError:
+                    pass
+
         def do_POST(self) -> None:
             self._script_nonce = ""
             if not self._host_ok():
+                self._drain_small_body()
                 self._send_json(403, {"ok": False, "error": "Hôte refusé"})
                 return
             if not self._origin_ok():
+                self._drain_small_body()
                 self._send_json(403, {"ok": False, "error": "Origine refusée"})
                 return
             path = urlparse(self.path).path
             if path not in ("/api/action", "/api/upload"):
+                self._drain_small_body()
                 self._send_json(404, {"ok": False, "error": "Endpoint introuvable"})
                 return
 
             token = self.headers.get("X-Kanban-Token", "")
             if not secrets.compare_digest(token, csrf_token):
+                self._drain_small_body()
                 self._send_json(403, {"ok": False, "error": "Jeton CSRF invalide ou manquant"})
                 return
 
