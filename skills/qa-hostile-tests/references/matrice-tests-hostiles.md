@@ -55,3 +55,36 @@ Même sans aucun calcul financier, tout logiciel a une logique à attaquer :
   - **Honnêteté OS & concurrence :** `SKIP` explicite hors Windows pour tout test Windows-only (zéro `PASS` muet sous Linux/Cloud) ; preuve horodatée d'un chevauchement réel des processus pour tout test de concurrence.
   - Données fictives uniquement : `CANARY_TEST_` / `@example.test`.
 - **Règle d'échec honnête (`Red -> Green`) :** en reprise (`Brownfield Gate`) comme en TDD, quand un test casse le moteur, le laisser échouer proprement (ou le consigner explicitement comme `ÉCHEC CONFIRMÉ — BUG MOTEUR`) sans jamais bricoler la tolérance pour afficher vert.
+
+## 7. Frontières Réelles : Données, SQLite Windows & Connecteurs
+Active chaque bloc uniquement si la surface existe (base de données, argent, réseau, connecteur qui écrit). Ces angles couvrent ce que le test de mutation ne voit pas : il mute le code, pas le réseau, le disque ni l'horloge.
+
+### 7.1 Data & Réseau
+- **Concurrence :** deux requêtes ou deux processus identiques à la même milliseconde (double clic, cron + CLI manuel). La protection attendue est en base (`UNIQUE`, `UPDATE ... WHERE state = 'approved'` qui n'affecte qu'une ligne, verrou), jamais un `if` en mémoire.
+- **Idempotence :** rejouer 2 ou 3 fois la même requête, le même webhook ou le même job doit laisser la base et les effets de bord (mails, crédits, publications) identiques à une seule exécution (clé d'idempotence `UNIQUE`).
+- **Timeouts :** tout appel externe a un `timeout` explicite et n'est **jamais** fait à l'intérieur d'une transaction DB ouverte (file d'attente ou table `jobs` à la place).
+- **Argent & temps :** montants en entiers dans la plus petite unité + devise, zéro `float` ; soldes et crédits en ledger *append-only* (`+100` / `-10`), jamais `balance = balance - 10`. Horodatage UTC côté serveur, jamais l'horloge client ; un rendez-vous futur garde l'heure locale + la timezone IANA (`Europe/Paris`).
+- **Suppression & RGPD :** supprimer un utilisateur fictif `canary_test_user@example.test` qui a déjà payé. Attendu : pas de `ON DELETE CASCADE` aveugle sur les factures, anonymisation des champs personnels, et un *soft delete* qui n'empêche pas la réinscription (contrainte `UNIQUE` sur l'email).
+
+### 7.2 Property-Based Testing (`0 €`)
+- Cibler les **2 à 3 fonctions métier pures les plus critiques** (calcul, permission, parsing, transition d'état), écrire leurs invariants absolus (ex. « le prix remisé n'est jamais négatif ni supérieur au prix initial ») et les attaquer avec `fast-check` (JS) ou `Hypothesis` (Python) sur **≥ 500 cas** générés (négatifs, `0`, chaînes vides, Unicode RTL, années bissextiles, très grands tableaux).
+- Fixer la graine (*seed*) dans le rapport pour rejouer un contre-exemple, et réduire chaque contre-exemple trouvé en test de régression classique.
+
+### 7.3 Restauration & Migrations (*Game Day*)
+- **Restauration réelle :** produire une sauvegarde par `VACUUM INTO` (ou l'API `backup`), la rouvrir dans un dossier temporaire neuf, exécuter `PRAGMA quick_check` (attendu `ok`) et comparer le nombre de lignes des tables critiques. Une sauvegarde jamais restaurée ne compte pas.
+- **Migration sans perte :** appliquer la migration sur une fixture **déjà remplie** (données `CANARY_TEST_`), jamais sur une base vide. Échec attendu sur une colonne `NOT NULL` sans valeur par défaut ; vérifier qu'une migration interrompue laisse la base à l'état précédent (transaction).
+
+### 7.4 SQLite & Windows réel
+- **PRAGMA à chaque ouverture :** un test relit `PRAGMA foreign_keys` (`1`), `journal_mode` (`wal`), `busy_timeout` (`5000`) et `synchronous` (`2` = `FULL` pour une base finance) sur une **nouvelle** connexion. Les clés étrangères sont désactivées par défaut dans SQLite.
+- **Verrous fantômes Windows Defender / indexeur :** simuler `EPERM` / `EBUSY` sur l'écriture atomique (`.tmp` puis remplacement). Attendu : 3 à 5 essais courts (20–150 ms) puis une erreur explicite, jamais un fichier tronqué ni un `.tmp` orphelin.
+- **Instance unique :** lancer deux fois la même tâche planifiée ; la seconde doit refuser via un verrou OS (mutex nommé ou fichier verrouillé `msvcrt`/`flock`), et un crash ne doit pas laisser de verrou bloquant.
+- **Dossier synchronisé :** refuser (ou signaler) une base WAL active placée sous OneDrive, Dropbox ou Google Drive.
+- **Arrêt gracieux :** envoyer `Ctrl+C` (`SIGINT` / `CTRL_BREAK_EVENT`) pendant une écriture ; attendu : transaction terminée ou annulée, verrous relâchés, base `quick_check` à `ok`.
+
+### 7.5 Injection de pannes aux frontières & actions irréversibles
+- **Réponses menteuses :** HTTP `200 OK` contenant une page HTML (captcha, maintenance Cloudflare) au lieu du JSON ; JSON tronqué au milieu ; prix en chaîne `"19.99"` ou `null` sur un champ habituel. Attendu : rejet par schéma strict, aucune écriture.
+- **Limitation :** `429` avec `Retry-After` en secondes **et** en date HTTP ; arrêt complet au 2ᵉ `429` ou `403`/challenge sur un connecteur social. Le compteur de débit est persisté en SQLite (il ne repart pas à zéro à chaque lancement).
+- **Timeout POST + redémarrage (*Check-Before-Act*) :** couper le processus après l'envoi d'un POST. Au redémarrage, une opération restée `in_flight` ou `uncertain` est réconciliée en lecture côté API ou escaladée à l'humain ; **tout nouvel essai aveugle est un échec du test**.
+- **Disque & base :** `SQLITE_BUSY` pendant une écriture concurrente et `EPERM` sur le fichier d'état : erreur explicite, état cohérent.
+- **Garde-fous d'écriture :** `--dry-run` par défaut et `Plan -> Apply` (le plan exécuté a le même hash que le plan approuvé) ; dépasser un plafond (*Blast-Radius Caps* : nombre d'annonces par run, écart de prix > seuil, montant cumulé 24 h) doit être refusé sans flag explicite ; un canari `'Bearer ' + 'CANARY_TEST_TOKEN'` injecté dans une erreur HTTP ne doit apparaître dans aucun log (DLP runtime) ; deux rafraîchissements OAuth2 simultanés ne doivent pas invalider le jeton (verrou exclusif + écriture atomique, stockage DPAPI / Credential Manager).
+- **Volet conditionnel App Web / Multi-users** (uniquement si une application web est exposée à plusieurs comptes) : `IDOR` (changer un identifiant dans l'URL ou le corps), *Mass Assignment* (`"role": "admin"`, `"isPaid": true` ajoutés au JSON), rate limiting des routes coûteuses, CORS restreint au domaine exact.
